@@ -75,6 +75,11 @@ Open `http://localhost:3000/`. Shows uptime, request totals, byte counters,
 errors, and a live table of recent requests. Click any row for the full
 request body, response body, status, duration, and client IP.
 
+## Docker
+
+See [DOCKER.md](DOCKER.md) for build & deployment instructions
+(`docker compose`, CLI, or helper scripts in `docker/`).
+
 ## License
 
 MIT

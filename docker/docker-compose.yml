@@ -1,0 +1,11 @@
+services:
+  ai-proxy:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: ai-proxy
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    env_file:
+      - ../.env
