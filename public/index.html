@@ -1,0 +1,315 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>AI Proxy — Dashboard</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+  :root {
+    --bg: #0f1419;
+    --panel: #1a1f29;
+    --panel-2: #232a36;
+    --border: #2a3340;
+    --text: #d6deeb;
+    --muted: #7c869a;
+    --accent: #7fdbca;
+    --ok: #4ade80;
+    --warn: #fbbf24;
+    --err: #f87171;
+    --info: #60a5fa;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    background: var(--bg); color: var(--text); font-size: 14px;
+  }
+  header {
+    padding: 14px 22px; background: var(--panel); border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 14px;
+  }
+  header h1 { margin: 0; font-size: 17px; font-weight: 600; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--ok); display: inline-block; }
+  .dot.off { background: var(--err); }
+  .container { padding: 18px 22px; }
+  .grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); margin-bottom: 18px; }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 14px 16px; }
+  .card .label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .5px; }
+  .card .value { font-size: 22px; font-weight: 600; margin-top: 4px; }
+  .card .sub { color: var(--muted); font-size: 12px; margin-top: 2px; }
+  .toolbar {
+    display: flex; gap: 10px; align-items: center; margin-bottom: 10px; flex-wrap: wrap;
+  }
+  .toolbar input, .toolbar select, .toolbar button {
+    background: var(--panel-2); color: var(--text); border: 1px solid var(--border);
+    border-radius: 6px; padding: 7px 11px; font-size: 13px; font-family: inherit;
+  }
+  .toolbar button { cursor: pointer; }
+  .toolbar button:hover { border-color: var(--accent); }
+  .toolbar .grow { flex: 1; }
+  .pill { padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; }
+  .pill.ok { background: rgba(74,222,128,.15); color: var(--ok); }
+  .pill.err { background: rgba(248,113,113,.15); color: var(--err); }
+  .pill.warn { background: rgba(251,191,36,.15); color: var(--warn); }
+  .pill.info { background: rgba(96,165,250,.15); color: var(--info); }
+  .pill.muted { background: rgba(124,134,154,.15); color: var(--muted); }
+  table { width: 100%; border-collapse: collapse; background: var(--panel); border-radius: 8px; overflow: hidden; }
+  th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--border); font-size: 13px; }
+  th { background: var(--panel-2); color: var(--muted); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: .5px; }
+  tbody tr { cursor: pointer; }
+  tbody tr:hover { background: var(--panel-2); }
+  tbody tr.error td:first-child { border-left: 3px solid var(--err); }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .truncate { max-width: 320px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .drawer {
+    position: fixed; top: 0; right: 0; bottom: 0; width: min(640px, 90vw);
+    background: var(--panel); border-left: 1px solid var(--border); padding: 22px;
+    overflow-y: auto; transform: translateX(100%); transition: transform .25s;
+    box-shadow: -10px 0 30px rgba(0,0,0,.4); z-index: 10;
+  }
+  .drawer.open { transform: translateX(0); }
+  .drawer h2 { margin: 0 0 14px 0; font-size: 16px; }
+  .drawer .row { display: flex; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--border); }
+  .drawer .row .k { color: var(--muted); width: 120px; flex-shrink: 0; font-size: 12px; }
+  .drawer .row .v { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; word-break: break-word; font-size: 12px; }
+  .drawer pre { background: var(--panel-2); padding: 12px; border-radius: 6px; overflow-x: auto; font-size: 12px; white-space: pre-wrap; word-break: break-word; }
+  .drawer .close { position: absolute; top: 14px; right: 18px; background: none; border: none; color: var(--muted); font-size: 22px; cursor: pointer; }
+  .overlay { position: fixed; inset: 0; background: rgba(0,0,0,.4); display: none; z-index: 9; }
+  .overlay.show { display: block; }
+  .empty { text-align: center; color: var(--muted); padding: 40px; }
+  .live-indicator { color: var(--muted); font-size: 12px; margin-left: auto; display: flex; align-items: center; gap: 6px; }
+  .pulse { width: 7px; height: 7px; background: var(--ok); border-radius: 50%; animation: pulse 1.6s infinite; }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .3; } }
+</style>
+</head>
+<body>
+<header>
+  <span id="statusDot" class="dot"></span>
+  <h1>AI Proxy Dashboard</h1>
+  <span id="upstreamInfo" class="pill muted"></span>
+  <div class="live-indicator">
+    <span class="pulse"></span><span id="liveLabel">live</span>
+  </div>
+</header>
+
+<div class="container">
+  <div class="grid" id="statsGrid"></div>
+
+  <div class="toolbar">
+    <input type="text" id="search" placeholder="Filter by path, model, error…" class="grow">
+    <select id="levelFilter">
+      <option value="">All</option>
+      <option value="error">Errors only</option>
+    </select>
+    <button id="clearBtn">Clear view</button>
+    <button id="pauseBtn">Pause</button>
+  </div>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Time</th>
+        <th>Method</th>
+        <th>Path</th>
+        <th>Model</th>
+        <th>Status</th>
+        <th>Duration</th>
+        <th>Stream</th>
+        <th>Error</th>
+      </tr>
+    </thead>
+    <tbody id="logBody"></tbody>
+  </table>
+  <div id="emptyState" class="empty">No requests yet. Send something to <span class="mono">/v1/...</span> to see it here.</div>
+</div>
+
+<div id="overlay" class="overlay"></div>
+<aside id="drawer" class="drawer">
+  <button class="close" id="drawerClose">×</button>
+  <h2>Request details</h2>
+  <div id="drawerBody"></div>
+</aside>
+
+<script>
+const token = new URLSearchParams(location.search).get('token') || '';
+const authQS = token ? `?token=${encodeURIComponent(token)}` : '';
+
+const state = {
+  entries: [],
+  maxRows: 500,
+  paused: false,
+  filter: '',
+  level: '',
+};
+
+const $ = id => document.getElementById(id);
+
+function fmtTime(ts) {
+  const d = new Date(ts);
+  return d.toLocaleTimeString([], { hour12: false }) + '.' + String(d.getMilliseconds()).padStart(3, '0');
+}
+function fmtBytes(n) {
+  if (!n) return '0 B';
+  const k = 1024;
+  if (n < k) return n + ' B';
+  if (n < k * k) return (n / k).toFixed(1) + ' KB';
+  return (n / k / k).toFixed(2) + ' MB';
+}
+function fmtDuration(ms) {
+  if (ms == null) return '—';
+  if (ms < 1000) return ms + 'ms';
+  return (ms / 1000).toFixed(2) + 's';
+}
+function fmtUptime(ms) {
+  const s = Math.floor(ms / 1000);
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const ss = s % 60;
+  return `${h}h ${m}m ${ss}s`;
+}
+function statusPill(s) {
+  if (s == null) return '<span class="pill muted">pending</span>';
+  if (s === 0) return '<span class="pill warn">aborted</span>';
+  if (s >= 500) return `<span class="pill err">${s}</span>`;
+  if (s >= 400) return `<span class="pill err">${s}</span>`;
+  if (s >= 300) return `<span class="pill warn">${s}</span>`;
+  return `<span class="pill ok">${s}</span>`;
+}
+
+async function fetchStatus() {
+  try {
+    const r = await fetch('/dashboard/status' + authQS);
+    if (!r.ok) throw new Error('status ' + r.status);
+    const s = await r.json();
+    renderStatus(s);
+    $('statusDot').classList.remove('off');
+  } catch (e) {
+    $('statusDot').classList.add('off');
+  }
+}
+
+function renderStatus(s) {
+  $('upstreamInfo').textContent = `${s.upstream.provider} → ${s.upstream.baseUrl}`;
+  $('upstreamInfo').title = `Outbound: ${s.upstream.outbound || 'direct'}`;
+  $('statsGrid').innerHTML = `
+    <div class="card"><div class="label">Uptime</div><div class="value">${fmtUptime(s.uptimeMs)}</div></div>
+    <div class="card"><div class="label">Total requests</div><div class="value">${s.totals.requests.toLocaleString()}</div></div>
+    <div class="card"><div class="label">Errors</div><div class="value" style="color:${s.totals.errors ? 'var(--err)' : 'inherit'}">${s.totals.errors.toLocaleString()}</div></div>
+    <div class="card"><div class="label">Streaming</div><div class="value">${s.totals.streaming.toLocaleString()}</div></div>
+    <div class="card"><div class="label">Bytes in</div><div class="value">${fmtBytes(s.totals.bytesIn)}</div></div>
+    <div class="card"><div class="label">Bytes out</div><div class="value">${fmtBytes(s.totals.bytesOut)}</div></div>
+    <div class="card"><div class="label">Default model</div><div class="value" style="font-size:15px">${s.config.defaultModel}</div><div class="sub">auth ${s.config.authEnabled ? 'enabled' : 'OFF'}</div></div>
+  `;
+}
+
+async function fetchInitialLogs() {
+  const r = await fetch('/dashboard/logs?limit=200' + (authQS ? '&' + authQS.slice(1) : ''));
+  const { entries } = await r.json();
+  state.entries = entries;
+  render();
+}
+
+function applyFilter(rows) {
+  let out = rows;
+  if (state.level === 'error') out = out.filter(e => e.error || (e.status && e.status >= 400));
+  if (state.filter) {
+    const q = state.filter.toLowerCase();
+    out = out.filter(e =>
+      (e.path || '').toLowerCase().includes(q) ||
+      (e.model || '').toLowerCase().includes(q) ||
+      (e.error || '').toLowerCase().includes(q)
+    );
+  }
+  return out;
+}
+
+function render() {
+  const rows = applyFilter(state.entries);
+  $('emptyState').style.display = rows.length ? 'none' : 'block';
+  $('logBody').innerHTML = rows.slice().reverse().map(e => `
+    <tr data-id="${e.id}" class="${e.error || (e.status && e.status >= 400) ? 'error' : ''}">
+      <td class="mono">${fmtTime(e.timestamp)}</td>
+      <td><span class="pill info">${e.method}</span></td>
+      <td class="mono truncate" title="${e.path}">${e.path}</td>
+      <td class="mono">${e.model || '—'}</td>
+      <td>${statusPill(e.status)}</td>
+      <td class="mono">${fmtDuration(e.durationMs)}</td>
+      <td>${e.stream ? '<span class="pill info">SSE</span>' : ''}</td>
+      <td class="truncate" title="${e.error || ''}">${e.error || ''}</td>
+    </tr>
+  `).join('');
+}
+
+function openDetail(id) {
+  const e = state.entries.find(x => x.id === Number(id));
+  if (!e) return;
+  $('drawerBody').innerHTML = `
+    <div class="row"><div class="k">ID</div><div class="v">${e.id}</div></div>
+    <div class="row"><div class="k">Time</div><div class="v">${new Date(e.timestamp).toISOString()}</div></div>
+    <div class="row"><div class="k">Method</div><div class="v">${e.method}</div></div>
+    <div class="row"><div class="k">Path</div><div class="v">${e.path}</div></div>
+    <div class="row"><div class="k">Model</div><div class="v">${e.model || '—'}</div></div>
+    <div class="row"><div class="k">Status</div><div class="v">${e.status ?? 'pending'}</div></div>
+    <div class="row"><div class="k">Duration</div><div class="v">${fmtDuration(e.durationMs)}</div></div>
+    <div class="row"><div class="k">Stream</div><div class="v">${e.stream ? 'yes' : 'no'}</div></div>
+    <div class="row"><div class="k">Bytes in/out</div><div class="v">${fmtBytes(e.bytesIn)} / ${fmtBytes(e.bytesOut)}</div></div>
+    <div class="row"><div class="k">Client IP</div><div class="v">${e.clientIp || '—'}</div></div>
+    ${e.error ? `<div class="row"><div class="k">Error</div><div class="v" style="color:var(--err)">${e.error}</div></div>` : ''}
+    <h3 style="margin-top:18px;font-size:13px;color:var(--muted)">Request body</h3>
+    <pre>${escapeHtml(e.requestBody || '(empty)')}</pre>
+    <h3 style="margin-top:18px;font-size:13px;color:var(--muted)">Response body</h3>
+    <pre>${escapeHtml(e.responseBody || (e.stream ? '(streamed — not captured)' : '(empty)'))}</pre>
+  `;
+  $('drawer').classList.add('open');
+  $('overlay').classList.add('show');
+}
+
+function escapeHtml(s) {
+  if (s == null) return '';
+  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+function closeDrawer() {
+  $('drawer').classList.remove('open');
+  $('overlay').classList.remove('show');
+}
+
+function startStream() {
+  const es = new EventSource('/dashboard/logs/stream' + authQS);
+  es.onmessage = ev => {
+    if (state.paused) return;
+    try {
+      const entry = JSON.parse(ev.data);
+      state.entries.push(entry);
+      if (state.entries.length > state.maxRows) state.entries.splice(0, state.entries.length - state.maxRows);
+      render();
+    } catch {}
+  };
+  es.onerror = () => {
+    $('liveLabel').textContent = 'reconnecting…';
+    setTimeout(() => { $('liveLabel').textContent = 'live'; }, 2000);
+  };
+}
+
+// Wire UI
+$('logBody').addEventListener('click', e => {
+  const tr = e.target.closest('tr');
+  if (tr) openDetail(tr.dataset.id);
+});
+$('drawerClose').addEventListener('click', closeDrawer);
+$('overlay').addEventListener('click', closeDrawer);
+$('search').addEventListener('input', e => { state.filter = e.target.value; render(); });
+$('levelFilter').addEventListener('change', e => { state.level = e.target.value; render(); });
+$('clearBtn').addEventListener('click', () => { state.entries = []; render(); });
+$('pauseBtn').addEventListener('click', e => {
+  state.paused = !state.paused;
+  e.target.textContent = state.paused ? 'Resume' : 'Pause';
+  $('liveLabel').textContent = state.paused ? 'paused' : 'live';
+});
+
+// Boot
+fetchStatus();
+fetchInitialLogs().then(startStream);
+setInterval(fetchStatus, 3000);
+</script>
+</body>
+</html>

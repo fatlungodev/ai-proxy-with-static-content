@@ -1,0 +1,78 @@
+const path = require('path');
+const express = require('express');
+const cors = require('cors');
+const morgan = require('morgan');
+const config = require('./config'); // loads dotenv internally
+const auth = require('./middleware/auth');
+const requestLogger = require('./middleware/logger');
+const httpClient = require('./proxy/httpClient');
+
+process.on('unhandledRejection', err => {
+  console.error('Unhandled promise rejection:', err);
+});
+process.on('uncaughtException', err => {
+  console.error('Uncaught exception:', err);
+});
+
+const app = express();
+
+// CORS — must come before auth so preflight OPTIONS passes through
+const corsOptions = {
+  origin: config.corsOrigins === '*' ? '*' : config.corsOrigins.split(',').map(o => o.trim()),
+  allowedHeaders: ['Content-Type', 'Authorization', 'x-api-key', 'OpenAI-Beta'],
+  exposedHeaders: ['X-Request-ID'],
+  methods: ['GET', 'POST', 'OPTIONS'],
+};
+app.use(cors(corsOptions));
+app.options('*', cors(corsOptions)); // explicit preflight handler
+
+app.use(express.json({ limit: '10mb' }));
+app.use(morgan(config.logLevel === 'debug' ? 'dev' : 'combined'));
+
+// Health check (no auth) — n8n can ping this to verify connectivity
+app.get('/health', (req, res) => {
+  res.json({ status: 'ok', upstream: config.upstream.baseUrl, provider: config.upstream.provider });
+});
+
+// Dashboard (static page + API)
+app.use('/dashboard', require('./routes/dashboard'));
+app.use('/', express.static(path.join(__dirname, '..', 'public')));
+
+// All /v1 routes require auth + are logged for the dashboard
+app.use('/v1', auth);
+app.use('/v1', requestLogger);
+app.use('/v1/models', require('./routes/models'));
+app.use('/v1/chat', require('./routes/chat'));
+app.use('/v1/completions', require('./routes/completions'));
+app.use('/v1/embeddings', require('./routes/embeddings'));
+
+// 404 for unknown routes
+app.use((req, res) => {
+  res.status(404).json({
+    error: {
+      message: `Unknown route: ${req.method} ${req.path}`,
+      type: 'invalid_request_error',
+    },
+  });
+});
+
+// Global error handler
+app.use((err, req, res, _next) => {
+  console.error('Unhandled error:', err);
+  res.status(500).json({
+    error: { message: 'Internal proxy error', type: 'proxy_error' },
+  });
+});
+
+app.listen(config.port, config.host, () => {
+  console.log(`AI Proxy listening on http://${config.host}:${config.port}`);
+  console.log(`Upstream: ${config.upstream.provider} → ${config.upstream.baseUrl}`);
+  if (!config.proxyApiKey) {
+    console.warn('WARNING: PROXY_API_KEY is not set — all requests are unauthenticated');
+  }
+  if (config.corsOrigins) {
+    console.log(`CORS origins: ${config.corsOrigins}`);
+  }
+  console.log(`Dashboard:  http://${config.host}:${config.port}/`);
+  console.log(`Outbound:   ${httpClient.describe()}`);
+});
