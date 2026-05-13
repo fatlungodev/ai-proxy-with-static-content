@@ -52,6 +52,7 @@ app.use('/v1', requestLogger);
 app.use('/v1/models', require('./routes/models'));
 app.use('/v1/chat', require('./routes/chat'));
 app.use('/v1/completions', require('./routes/completions'));
+app.use('/v1/responses', require('./routes/responses'));
 app.use('/v1/embeddings', require('./routes/embeddings'));
 
 // 404 for unknown routes

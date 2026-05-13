@@ -342,4 +342,212 @@ async function embeddings(body) {
   };
 }
 
-module.exports = { listModels, chatCompletions, pipeChatStream, embeddings };
+// ----- /v1/responses -----
+// OpenAI's Responses API is a chat-completion superset with a different
+// request/response shape. We translate by reusing the chat path internally.
+
+function responsesInputToMessages(input, instructions) {
+  const messages = [];
+  if (instructions) messages.push({ role: 'system', content: String(instructions) });
+
+  if (typeof input === 'string') {
+    messages.push({ role: 'user', content: input });
+  } else if (Array.isArray(input)) {
+    for (const item of input) {
+      if (!item) continue;
+      // Items can be strings, {role, content}, or typed items like
+      // {type: 'message', role, content: [{type:'input_text', text}]}
+      if (typeof item === 'string') {
+        messages.push({ role: 'user', content: item });
+        continue;
+      }
+      const role = item.role || 'user';
+      let content = item.content;
+      if (Array.isArray(content)) {
+        content = content
+          .map(p => {
+            if (typeof p === 'string') return p;
+            if (p?.type === 'input_text' || p?.type === 'output_text' || p?.type === 'text') return p.text || '';
+            return '';
+          })
+          .filter(Boolean)
+          .join('');
+      }
+      messages.push({ role, content: content ?? '' });
+    }
+  }
+  return messages;
+}
+
+function buildResponsesEnvelope({ id, model, status, text, usage, finishReason }) {
+  return {
+    id,
+    object: 'response',
+    created_at: Math.floor(Date.now() / 1000),
+    status,
+    model,
+    output: [
+      {
+        type: 'message',
+        id: 'msg_' + randomUUID(),
+        status: 'completed',
+        role: 'assistant',
+        content: [{ type: 'output_text', text: text || '', annotations: [] }],
+      },
+    ],
+    output_text: text || '',
+    usage: usage
+      ? {
+          input_tokens: usage.prompt_tokens,
+          output_tokens: usage.completion_tokens,
+          total_tokens: usage.total_tokens,
+        }
+      : undefined,
+    incomplete_details: finishReason && finishReason !== 'stop' ? { reason: finishReason } : null,
+  };
+}
+
+async function responses(body) {
+  const chatBody = {
+    model: body.model,
+    messages: responsesInputToMessages(body.input, body.instructions),
+    stream: body.stream === true,
+    temperature: body.temperature,
+    top_p: body.top_p,
+    max_tokens: body.max_output_tokens ?? body.max_tokens,
+    stop: body.stop,
+    response_format: body.text?.format ? { type: body.text.format.type } : body.response_format,
+  };
+
+  const result = await chatCompletions(chatBody);
+
+  if (result.stream) {
+    return { ...result, responsesMode: true };
+  }
+
+  if (result.status >= 400) return result;
+
+  const choice = result.data.choices?.[0];
+  return {
+    status: 200,
+    stream: false,
+    data: buildResponsesEnvelope({
+      id: 'resp_' + randomUUID(),
+      model: result.data.model,
+      status: 'completed',
+      text: choice?.message?.content || '',
+      usage: result.data.usage,
+      finishReason: choice?.finish_reason,
+    }),
+  };
+}
+
+// Translate a Gemini SSE stream into Responses API semantic events.
+function pipeResponsesStream(result, req, res) {
+  res.status(200);
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.flushHeaders?.();
+
+  const respId = 'resp_' + randomUUID();
+  const msgId = 'msg_' + randomUUID();
+  const model = result.model;
+  let acc = '';
+  let buf = '';
+  let finalUsage = null;
+  let started = false;
+  let seq = 0;
+
+  function send(type, payload) {
+    seq += 1;
+    res.write(`event: ${type}\n`);
+    res.write(`data: ${JSON.stringify({ type, sequence_number: seq, ...payload })}\n\n`);
+  }
+
+  function emitStart() {
+    if (started) return;
+    started = true;
+    const envelope = buildResponsesEnvelope({
+      id: respId, model, status: 'in_progress', text: '',
+    });
+    send('response.created', { response: envelope });
+    send('response.in_progress', { response: envelope });
+    send('response.output_item.added', {
+      output_index: 0,
+      item: {
+        type: 'message', id: msgId, status: 'in_progress',
+        role: 'assistant', content: [],
+      },
+    });
+    send('response.content_part.added', {
+      item_id: msgId, output_index: 0, content_index: 0,
+      part: { type: 'output_text', text: '', annotations: [] },
+    });
+  }
+
+  result.geminiStream.on('data', chunk => {
+    buf += chunk.toString('utf8');
+    let sep;
+    while ((sep = buf.indexOf('\n\n')) !== -1) {
+      const event = buf.slice(0, sep);
+      buf = buf.slice(sep + 2);
+      let payload = '';
+      for (const line of event.split('\n')) {
+        if (line.startsWith('data:')) payload += line.slice(5).trim();
+      }
+      if (!payload || payload === '[DONE]') continue;
+      let obj;
+      try { obj = JSON.parse(payload); } catch { continue; }
+
+      const candidate = obj.candidates?.[0];
+      const text = (candidate?.content?.parts || []).map(p => p.text || '').join('');
+      if (obj.usageMetadata) finalUsage = obj.usageMetadata;
+
+      if (text) {
+        emitStart();
+        acc += text;
+        send('response.output_text.delta', {
+          item_id: msgId, output_index: 0, content_index: 0, delta: text,
+        });
+      }
+    }
+  });
+
+  result.geminiStream.on('end', () => {
+    emitStart();
+    send('response.output_text.done', {
+      item_id: msgId, output_index: 0, content_index: 0, text: acc,
+    });
+    send('response.content_part.done', {
+      item_id: msgId, output_index: 0, content_index: 0,
+      part: { type: 'output_text', text: acc, annotations: [] },
+    });
+    send('response.output_item.done', {
+      output_index: 0,
+      item: {
+        type: 'message', id: msgId, status: 'completed',
+        role: 'assistant',
+        content: [{ type: 'output_text', text: acc, annotations: [] }],
+      },
+    });
+    const usage = geminiUsageToOai(finalUsage);
+    send('response.completed', {
+      response: buildResponsesEnvelope({
+        id: respId, model, status: 'completed', text: acc, usage,
+      }),
+    });
+    res.end();
+  });
+
+  result.geminiStream.on('error', err => {
+    console.error('[gemini responses stream]', err.message);
+    if (!res.writableEnded) res.end();
+  });
+
+  req.on('close', () => {
+    if (!result.geminiStream.destroyed) result.geminiStream.destroy();
+  });
+}
+
+module.exports = { listModels, chatCompletions, pipeChatStream, embeddings, responses, pipeResponsesStream };
