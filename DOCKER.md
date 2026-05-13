@@ -17,7 +17,8 @@ Deploy the **AI Proxy** using Docker for a consistent and isolated environment.
 
 ### Option 1: Using Shell Scripts
 
-Quick scripts provided for building, starting, and stopping. Run from inside the `docker/` directory.
+Quick scripts provided for building, starting, and stopping. The scripts
+auto-anchor to the project root, so you can invoke them from anywhere.
 
 1.  **Prepare the environment** (in project root):
     ```bash
@@ -27,17 +28,17 @@ Quick scripts provided for building, starting, and stopping. Run from inside the
 
 2.  **Build**:
     ```bash
-    cd docker && sh update.sh
+    sh docker/update.sh
     ```
 
-3.  **Start** (must be in the dir that contains your `.env`):
+3.  **Start**:
     ```bash
-    sh start.sh
+    sh docker/start.sh
     ```
 
 4.  **Stop & Remove**:
     ```bash
-    sh stop.sh
+    sh docker/stop.sh
     ```
 
 ---

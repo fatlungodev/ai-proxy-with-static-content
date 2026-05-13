@@ -47,20 +47,27 @@ module.exports = function logger(req, res, next) {
     return origWrite(chunk, ...rest);
   };
 
+  let recorded = false;
+  function record() {
+    if (recorded) return;
+    recorded = true;
+    logStore.add(entry);
+  }
+
   res.on('finish', () => {
     entry.status = res.statusCode;
     entry.durationMs = Date.now() - start;
     entry.bytesOut = bytesOut || parseInt(res.getHeader('content-length') || '0', 10);
     if (!entry.error && res.statusCode >= 400) entry.error = `HTTP ${res.statusCode}`;
-    logStore.add(entry);
+    record();
   });
 
   res.on('close', () => {
-    if (!res.writableEnded && entry.status == null) {
+    if (!res.writableEnded && !recorded) {
       entry.status = 0;
       entry.error = 'Client disconnected before response completed';
       entry.durationMs = Date.now() - start;
-      logStore.add(entry);
+      record();
     }
   });
 

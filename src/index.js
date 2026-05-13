@@ -16,6 +16,14 @@ process.on('uncaughtException', err => {
 
 const app = express();
 
+// Honors X-Forwarded-* when running behind a reverse proxy.
+// Set TRUST_PROXY=true (loopback hop), a number (hops), or a CIDR list.
+// See https://expressjs.com/en/guide/behind-proxies.html
+if (process.env.TRUST_PROXY) {
+  const v = process.env.TRUST_PROXY;
+  app.set('trust proxy', v === 'true' ? true : (/^\d+$/.test(v) ? Number(v) : v));
+}
+
 // CORS — must come before auth so preflight OPTIONS passes through
 const corsOptions = {
   origin: config.corsOrigins === '*' ? '*' : config.corsOrigins.split(',').map(o => o.trim()),

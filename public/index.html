@@ -143,6 +143,14 @@ const state = {
 
 const $ = id => document.getElementById(id);
 
+// Escape user-controlled strings before injecting into HTML / attributes.
+// Used everywhere we build markup from log entries, since path/model/error
+// originate in client requests and could otherwise inject HTML.
+function esc(s) {
+  if (s == null) return '';
+  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
 function fmtTime(ts) {
   const d = new Date(ts);
   return d.toLocaleTimeString([], { hour12: false }) + '.' + String(d.getMilliseconds()).padStart(3, '0');
@@ -197,7 +205,7 @@ function renderStatus(s) {
     <div class="card"><div class="label">Streaming</div><div class="value">${s.totals.streaming.toLocaleString()}</div></div>
     <div class="card"><div class="label">Bytes in</div><div class="value">${fmtBytes(s.totals.bytesIn)}</div></div>
     <div class="card"><div class="label">Bytes out</div><div class="value">${fmtBytes(s.totals.bytesOut)}</div></div>
-    <div class="card"><div class="label">Default model</div><div class="value" style="font-size:15px">${s.config.defaultModel}</div><div class="sub">auth ${s.config.authEnabled ? 'enabled' : 'OFF'}</div></div>
+    <div class="card"><div class="label">Default model</div><div class="value" style="font-size:15px">${esc(s.config.defaultModel)}</div><div class="sub">auth ${s.config.authEnabled ? 'enabled' : 'OFF'}</div></div>
   `;
 }
 
@@ -228,13 +236,13 @@ function render() {
   $('logBody').innerHTML = rows.slice().reverse().map(e => `
     <tr data-id="${e.id}" class="${e.error || (e.status && e.status >= 400) ? 'error' : ''}">
       <td class="mono">${fmtTime(e.timestamp)}</td>
-      <td><span class="pill info">${e.method}</span></td>
-      <td class="mono truncate" title="${e.path}">${e.path}</td>
-      <td class="mono">${e.model || '—'}</td>
+      <td><span class="pill info">${esc(e.method)}</span></td>
+      <td class="mono truncate" title="${esc(e.path)}">${esc(e.path)}</td>
+      <td class="mono">${esc(e.model) || '—'}</td>
       <td>${statusPill(e.status)}</td>
       <td class="mono">${fmtDuration(e.durationMs)}</td>
       <td>${e.stream ? '<span class="pill info">SSE</span>' : ''}</td>
-      <td class="truncate" title="${e.error || ''}">${e.error || ''}</td>
+      <td class="truncate" title="${esc(e.error)}">${esc(e.error)}</td>
     </tr>
   `).join('');
 }
@@ -244,28 +252,23 @@ function openDetail(id) {
   if (!e) return;
   $('drawerBody').innerHTML = `
     <div class="row"><div class="k">ID</div><div class="v">${e.id}</div></div>
-    <div class="row"><div class="k">Time</div><div class="v">${new Date(e.timestamp).toISOString()}</div></div>
-    <div class="row"><div class="k">Method</div><div class="v">${e.method}</div></div>
-    <div class="row"><div class="k">Path</div><div class="v">${e.path}</div></div>
-    <div class="row"><div class="k">Model</div><div class="v">${e.model || '—'}</div></div>
+    <div class="row"><div class="k">Time</div><div class="v">${esc(new Date(e.timestamp).toISOString())}</div></div>
+    <div class="row"><div class="k">Method</div><div class="v">${esc(e.method)}</div></div>
+    <div class="row"><div class="k">Path</div><div class="v">${esc(e.path)}</div></div>
+    <div class="row"><div class="k">Model</div><div class="v">${esc(e.model) || '—'}</div></div>
     <div class="row"><div class="k">Status</div><div class="v">${e.status ?? 'pending'}</div></div>
     <div class="row"><div class="k">Duration</div><div class="v">${fmtDuration(e.durationMs)}</div></div>
     <div class="row"><div class="k">Stream</div><div class="v">${e.stream ? 'yes' : 'no'}</div></div>
     <div class="row"><div class="k">Bytes in/out</div><div class="v">${fmtBytes(e.bytesIn)} / ${fmtBytes(e.bytesOut)}</div></div>
-    <div class="row"><div class="k">Client IP</div><div class="v">${e.clientIp || '—'}</div></div>
-    ${e.error ? `<div class="row"><div class="k">Error</div><div class="v" style="color:var(--err)">${e.error}</div></div>` : ''}
+    <div class="row"><div class="k">Client IP</div><div class="v">${esc(e.clientIp) || '—'}</div></div>
+    ${e.error ? `<div class="row"><div class="k">Error</div><div class="v" style="color:var(--err)">${esc(e.error)}</div></div>` : ''}
     <h3 style="margin-top:18px;font-size:13px;color:var(--muted)">Request body</h3>
-    <pre>${escapeHtml(e.requestBody || '(empty)')}</pre>
+    <pre>${esc(e.requestBody || '(empty)')}</pre>
     <h3 style="margin-top:18px;font-size:13px;color:var(--muted)">Response body</h3>
-    <pre>${escapeHtml(e.responseBody || (e.stream ? '(streamed — not captured)' : '(empty)'))}</pre>
+    <pre>${esc(e.responseBody || (e.stream ? '(streamed — not captured)' : '(empty)'))}</pre>
   `;
   $('drawer').classList.add('open');
   $('overlay').classList.add('show');
-}
-
-function escapeHtml(s) {
-  if (s == null) return '';
-  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
 
 function closeDrawer() {
