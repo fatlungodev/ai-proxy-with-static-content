@@ -55,6 +55,11 @@ app.get(['/', '/index.html'], (req, res, next) => {
   next();
 });
 
+// Serve login page explicitly — express.static only matches /login.html, not /login
+app.get('/login', (req, res) => {
+  res.sendFile(path.join(__dirname, '..', 'public', 'login.html'));
+});
+
 app.use('/', express.static(path.join(__dirname, '..', 'public')));
 
 // All /v1 routes require auth + are logged for the dashboard
