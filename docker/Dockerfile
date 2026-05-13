@@ -12,7 +12,7 @@ RUN git clone --depth 1 "${APP_REPO_URL}" /app \
 WORKDIR /app
 
 # Container runtime port (must match docker-compose.yml + start.sh)
-ENV PORT=3000
+ENV PORT=3005
 ENV HOST=0.0.0.0
 
 # Install production dependencies
@@ -20,7 +20,7 @@ RUN npm install -g npm@11.9.0 \
     && npm install --omit=dev
 
 # Expose proxy port
-EXPOSE 3000
+EXPOSE 3005
 
 # Start the application
 CMD ["npm", "start"]

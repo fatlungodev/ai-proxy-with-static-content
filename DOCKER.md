@@ -82,7 +82,7 @@ Quick scripts provided for building, starting, and stopping. Run from inside the
     ```bash
     docker run -d \
       --name ai-proxy \
-      -p 3000:3000 \
+      -p 3005:3005 \
       --env-file .env \
       ai-proxy
     ```
@@ -106,5 +106,5 @@ docker build \
 - **View Logs**: `docker logs -f ai-proxy`
 - **Stop Container**: `docker stop ai-proxy`
 - **Check Status**: `docker compose -f docker/docker-compose.yml ps`
-- **Dashboard**: open `http://<host>:3000/` in a browser
-- **Health Check**: `curl http://localhost:3000/health`
+- **Dashboard**: open `http://<host>:3005/` in a browser
+- **Health Check**: `curl http://localhost:3005/health`

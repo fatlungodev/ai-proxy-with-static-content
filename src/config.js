@@ -1,7 +1,7 @@
 require('dotenv').config();
 
 module.exports = {
-  port: parseInt(process.env.PORT || '3000', 10),
+  port: parseInt(process.env.PORT || '3005', 10),
   host: process.env.HOST || '0.0.0.0',
   proxyApiKey: process.env.PROXY_API_KEY || '',
   upstream: {

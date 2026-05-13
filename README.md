@@ -34,7 +34,7 @@ Point any OpenAI client at the proxy:
 
 ```python
 from openai import OpenAI
-client = OpenAI(base_url="http://localhost:3000/v1", api_key="<PROXY_API_KEY>")
+client = OpenAI(base_url="http://localhost:3005/v1", api_key="<PROXY_API_KEY>")
 ```
 
 ## Configuration
@@ -65,13 +65,13 @@ Clients keep using the OpenAI protocol — the proxy translates both directions.
 
 1. n8n → Credentials → **OpenAI**
 2. API Key → your `PROXY_API_KEY`
-3. Base URL → `http://your-proxy-host:3000/v1`
+3. Base URL → `http://your-proxy-host:3005/v1`
 4. In the AI Agent node, select the credential — the model dropdown is
    populated from `/v1/models`
 
 ## Dashboard
 
-Open `http://localhost:3000/`. Shows uptime, request totals, byte counters,
+Open `http://localhost:3005/`. Shows uptime, request totals, byte counters,
 errors, and a live table of recent requests. Click any row for the full
 request body, response body, status, duration, and client IP.
 
