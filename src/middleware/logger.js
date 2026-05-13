@@ -1,4 +1,5 @@
 const logStore = require('../logStore');
+const config = require('../config');
 
 const MAX_BODY_SNIPPET = 2000; // chars stored per request/response
 
@@ -12,6 +13,7 @@ function snippet(obj) {
 }
 
 // Captures req/res into the log store. Mounted at /v1 so every request here is logged.
+// Sets req._proxyEntry and req.trace() so downstream middleware can annotate the entry.
 module.exports = function logger(req, res, next) {
   const start = Date.now();
   const entry = {
@@ -29,6 +31,16 @@ module.exports = function logger(req, res, next) {
     bytesIn: parseInt(req.headers['content-length'] || '0', 10),
     bytesOut: 0,
     clientIp: req.ip,
+    trace: [],
+  };
+
+  // Expose the entry and a trace helper to downstream middleware and route handlers.
+  req._proxyEntry = entry;
+  req.trace = (event, data = {}) => {
+    entry.trace.push({ ms: Date.now() - start, event, ...data });
+    if (config.logLevel === 'debug') {
+      console.log(`[trace] ${req.method} ${req.path} +${Date.now() - start}ms ${event}`, data);
+    }
   };
 
   // Intercept res.json to capture response body (non-stream path)

@@ -43,7 +43,7 @@ function isAuthenticated(req) {
   // Bearer token or ?token= query param (for API clients / n8n)
   const provided = req.query.token ||
     (req.headers['authorization'] || '').replace(/^Bearer\s+/i, '');
-  if (legacyToken && safeEqual(provided, legacyToken)) return true;
+  if (legacyToken && legacyToken.length > 0 && safeEqual(provided, legacyToken)) return true;
   if (password && safeEqual(provided, password)) return true;
 
   // Session cookie set by the login form

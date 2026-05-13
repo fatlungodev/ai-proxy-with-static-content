@@ -7,16 +7,26 @@ module.exports = function pipeStream(upstream, req, res, label) {
   res.setHeader('Connection', 'keep-alive');
   res.flushHeaders?.();
 
+  req.trace?.('stream_pipe_start', { label, status: upstream.status });
+
   const upstreamStream = upstream.data;
 
   upstreamStream.on('error', err => {
     console.error(`[${label}] upstream stream error:`, err.message);
+    req.trace?.('stream_pipe_error', { label, error: err.message });
     if (!res.writableEnded) res.end();
+  });
+
+  upstreamStream.on('end', () => {
+    req.trace?.('stream_pipe_done', { label });
   });
 
   // If the client disconnects, tear down the upstream stream.
   req.on('close', () => {
-    if (!upstreamStream.destroyed) upstreamStream.destroy();
+    if (!upstreamStream.destroyed) {
+      req.trace?.('stream_pipe_client_disconnect', { label });
+      upstreamStream.destroy();
+    }
   });
 
   upstreamStream.pipe(res);

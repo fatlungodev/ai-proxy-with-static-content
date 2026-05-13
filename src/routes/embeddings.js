@@ -24,7 +24,7 @@ router.post('/', async (req, res) => {
       return res.status(result.status).json(result.data);
     }
 
-    const upstream = await forwardRequest('/v1/embeddings', 'POST', body, req.headers);
+    const upstream = await forwardRequest('/v1/embeddings', 'POST', body, req.headers, req);
     res.status(upstream.status).json(upstream.data);
   } catch (err) {
     console.error('[embeddings] upstream error:', err.message);

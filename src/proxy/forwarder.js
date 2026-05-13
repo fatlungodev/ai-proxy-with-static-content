@@ -41,10 +41,21 @@ function readStreamToBuffer(stream) {
   });
 }
 
-async function forwardRequest(path, method, body, reqHeaders) {
+// req is optional — pass it to attach trace events to the request log entry.
+async function forwardRequest(path, method, body, reqHeaders, req) {
   const url = `${config.upstream.baseUrl}${path}`;
   const headers = buildUpstreamHeaders(reqHeaders);
   const isStream = body && body.stream === true;
+
+  req?.trace?.('upstream_request', {
+    url,
+    method,
+    model: body?.model || null,
+    stream: isStream,
+    provider: config.upstream.provider,
+  });
+
+  const t0 = Date.now();
 
   const response = await axios({
     method,
@@ -71,6 +82,13 @@ async function forwardRequest(path, method, body, reqHeaders) {
     response.data = parsed;
     response.streamFailed = true;
   }
+
+  req?.trace?.('upstream_response', {
+    status: response.status,
+    durationMs: Date.now() - t0,
+    streaming: isStream && !response.streamFailed,
+    streamFailed: response.streamFailed || false,
+  });
 
   return response;
 }
