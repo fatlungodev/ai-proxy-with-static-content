@@ -5,6 +5,8 @@ const morgan = require('morgan');
 const config = require('./config'); // loads dotenv internally
 const auth = require('./middleware/auth');
 const requestLogger = require('./middleware/logger');
+const staticReply = require('./middleware/staticReply');
+const { isAuthenticated } = require('./middleware/dashboardAuth');
 const httpClient = require('./proxy/httpClient');
 
 process.on('unhandledRejection', err => {
@@ -29,7 +31,7 @@ const corsOptions = {
   origin: config.corsOrigins === '*' ? '*' : config.corsOrigins.split(',').map(o => o.trim()),
   allowedHeaders: ['Content-Type', 'Authorization', 'x-api-key', 'OpenAI-Beta'],
   exposedHeaders: ['X-Request-ID'],
-  methods: ['GET', 'POST', 'OPTIONS'],
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
 };
 app.use(cors(corsOptions));
 app.options('*', cors(corsOptions)); // explicit preflight handler
@@ -44,12 +46,25 @@ app.get('/health', (req, res) => {
 
 // Dashboard (static page + API)
 app.use('/dashboard', require('./routes/dashboard'));
+
+// Protect the main dashboard page — redirect to /login only when DASHBOARD_PASSWORD
+// is configured. If only DASHBOARD_TOKEN is set, the legacy query-param/bearer flow
+// still works and we must NOT redirect to /login (the form there can't handle tokens).
+app.get(['/', '/index.html'], (req, res, next) => {
+  if (process.env.DASHBOARD_PASSWORD && !isAuthenticated(req)) return res.redirect('/login');
+  next();
+});
+
 app.use('/', express.static(path.join(__dirname, '..', 'public')));
 
 // All /v1 routes require auth + are logged for the dashboard
 app.use('/v1', auth);
 app.use('/v1', requestLogger);
 app.use('/v1/models', require('./routes/models'));
+// Static reply check runs before forwarding to upstream LLM
+app.use('/v1/chat', staticReply);
+app.use('/v1/completions', staticReply);
+app.use('/v1/responses', staticReply);
 app.use('/v1/chat', require('./routes/chat'));
 app.use('/v1/completions', require('./routes/completions'));
 app.use('/v1/responses', require('./routes/responses'));
