@@ -55,6 +55,11 @@ app.use('/v1/completions', require('./routes/completions'));
 app.use('/v1/responses', require('./routes/responses'));
 app.use('/v1/embeddings', require('./routes/embeddings'));
 
+// Catch-all: forwards any other /v1/* path (moderations, images, audio,
+// assistants, threads, files, batches, fine_tuning, vector_stores, ...)
+// to the upstream when provider=openai. Gemini gets a 501.
+app.use('/v1', require('./routes/passthrough'));
+
 // 404 for unknown routes
 app.use((req, res) => {
   res.status(404).json({
