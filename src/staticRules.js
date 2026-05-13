@@ -151,8 +151,15 @@ function extractPromptText(body) {
   if (Array.isArray(body.input)) {
     return body.input.map(item => {
       if (typeof item === 'string') return item;
-      if (item.type === 'message' && Array.isArray(item.content)) {
-        return item.content.filter(c => c.type === 'input_text').map(c => c.text).join(' ');
+      if (item.type === 'message') {
+        // content may be a plain string (n8n, OpenAI SDK simple form) or an array of parts
+        if (typeof item.content === 'string') return item.content;
+        if (Array.isArray(item.content)) {
+          return item.content
+            .filter(c => c.type === 'input_text' || c.type === 'text' || typeof c.text === 'string')
+            .map(c => c.text)
+            .join(' ');
+        }
       }
       return '';
     }).join('\n');
