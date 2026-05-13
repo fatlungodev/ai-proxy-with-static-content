@@ -2,6 +2,7 @@
 // Also exposes a simple pub/sub for live streaming to the dashboard.
 
 const MAX_ENTRIES = parseInt(process.env.LOG_BUFFER_SIZE || '500', 10);
+const MAX_APP_EVENTS = 200;
 
 const state = {
   entries: [],          // newest last
@@ -15,6 +16,7 @@ const state = {
     bytesOut: 0,
   },
   subscribers: new Set(), // each is a function(entry)
+  appEvents: [],          // application-level lifecycle events (startup, rule changes, errors)
 };
 
 function add(entry) {
@@ -57,4 +59,20 @@ function subscribe(fn) {
   return () => state.subscribers.delete(fn);
 }
 
-module.exports = { add, list, status, subscribe };
+// Record an application-level event (not tied to a specific request).
+function logApp(type, data = {}) {
+  const event = { ts: new Date().toISOString(), type, ...data };
+  state.appEvents.push(event);
+  if (state.appEvents.length > MAX_APP_EVENTS) {
+    state.appEvents.splice(0, state.appEvents.length - MAX_APP_EVENTS);
+  }
+  if (process.env.LOG_LEVEL === 'debug') {
+    console.log(`[app:${type}]`, data);
+  }
+}
+
+function getAppEvents() {
+  return [...state.appEvents];
+}
+
+module.exports = { add, list, status, subscribe, logApp, getAppEvents };

@@ -22,7 +22,7 @@ router.post('/', async (req, res) => {
       });
     }
 
-    const upstream = await forwardRequest('/v1/completions', 'POST', body, req.headers);
+    const upstream = await forwardRequest('/v1/completions', 'POST', body, req.headers, req);
 
     if (body.stream && !upstream.streamFailed) {
       return pipeStream(upstream, req, res, 'completions');

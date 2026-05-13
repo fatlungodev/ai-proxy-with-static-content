@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const { logApp } = require('./logStore');
 
 const DATA_FILE = path.join(__dirname, '..', 'data', 'rules.json');
 
@@ -18,9 +19,13 @@ function loadRules() {
     if (fs.existsSync(DATA_FILE)) {
       const raw = fs.readFileSync(DATA_FILE, 'utf8');
       rules = JSON.parse(raw);
+      logApp('rules_loaded', { count: rules.length, file: DATA_FILE });
+    } else {
+      logApp('rules_loaded', { count: 0, file: DATA_FILE, note: 'file not found, starting empty' });
     }
   } catch (err) {
     console.error('[staticRules] Failed to load rules:', err.message);
+    logApp('rules_load_error', { error: err.message, file: DATA_FILE });
     rules = [];
   }
 }
@@ -82,6 +87,7 @@ function add(rule) {
   };
   rules.push(newRule);
   saveRules();
+  logApp('rule_added', { id: newRule.id, name: newRule.name, matchType: newRule.matchType, pattern: newRule.pattern });
   return newRule;
 }
 
@@ -107,14 +113,17 @@ function update(id, updates) {
   }
   rules[idx] = { ...rules[idx], ...patch };
   saveRules();
+  logApp('rule_updated', { id: rules[idx].id, name: rules[idx].name, changes: Object.keys(patch) });
   return rules[idx];
 }
 
 function remove(id) {
   const idx = rules.findIndex(r => r.id === id);
   if (idx === -1) return false;
+  const removed = rules[idx];
   rules.splice(idx, 1);
   saveRules();
+  logApp('rule_removed', { id: removed.id, name: removed.name });
   return true;
 }
 

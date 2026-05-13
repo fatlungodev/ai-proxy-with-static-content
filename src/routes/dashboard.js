@@ -95,6 +95,37 @@ router.get('/logs', (req, res) => {
   res.json({ entries: logStore.list({ limit, sinceId, level }) });
 });
 
+router.get('/logs/download', (req, res) => {
+  const st = logStore.status();
+  const bundle = {
+    exportedAt: new Date().toISOString(),
+    server: {
+      startedAt: new Date(st.startedAt).toISOString(),
+      uptimeMs: st.uptimeMs,
+      bufferSize: st.bufferSize,
+      maxBufferSize: st.maxBufferSize,
+      totals: st.totals,
+    },
+    upstream: {
+      provider: config.upstream.provider,
+      baseUrl: config.upstream.baseUrl,
+    },
+    config: {
+      port: config.port,
+      defaultModel: config.defaultModel,
+      allowedModels: config.allowedModels,
+      authEnabled: !!config.proxyApiKey,
+    },
+    rules: staticRules.list(),
+    appEvents: logStore.getAppEvents(),
+    logs: logStore.list({ limit: 500 }),
+  };
+  const filename = `ai-proxy-debug-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
+  res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+  res.setHeader('Content-Type', 'application/json');
+  res.send(JSON.stringify(bundle, null, 2));
+});
+
 // Server-sent events stream of new log entries.
 router.get('/logs/stream', (req, res) => {
   res.status(200);

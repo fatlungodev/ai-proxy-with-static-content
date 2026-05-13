@@ -62,9 +62,9 @@ app.get('/login', (req, res) => {
 
 app.use('/', express.static(path.join(__dirname, '..', 'public')));
 
-// All /v1 routes require auth + are logged for the dashboard
-app.use('/v1', auth);
+// Logger runs first so every /v1 request is captured, including auth failures.
 app.use('/v1', requestLogger);
+app.use('/v1', auth);
 app.use('/v1/models', require('./routes/models'));
 // Static reply check runs before forwarding to upstream LLM
 app.use('/v1/chat', staticReply);

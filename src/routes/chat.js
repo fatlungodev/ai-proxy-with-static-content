@@ -28,7 +28,7 @@ router.post('/completions', async (req, res) => {
       return res.status(result.status).json(result.data);
     }
 
-    const upstream = await forwardRequest('/v1/chat/completions', 'POST', body, req.headers);
+    const upstream = await forwardRequest('/v1/chat/completions', 'POST', body, req.headers, req);
     if (body.stream && !upstream.streamFailed) {
       return pipeStream(upstream, req, res, 'chat');
     }

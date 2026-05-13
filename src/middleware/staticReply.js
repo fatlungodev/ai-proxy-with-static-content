@@ -151,19 +151,40 @@ function sendResponsesStreamResponse(rule, body, res) {
 module.exports = function staticReplyMiddleware(req, res, next) {
   const body = req.body || {};
   const promptText = staticRules.extractPromptText(body);
+  const allRules = staticRules.list();
+
+  req.trace?.('static_reply_check', {
+    promptSnippet: promptText.slice(0, 200) || '(empty)',
+    enabledRules: allRules.filter(r => r.enabled).length,
+    totalRules: allRules.length,
+  });
+
   const matchedRule = staticRules.match(promptText);
 
-  if (!matchedRule) return next();
+  if (!matchedRule) {
+    req.trace?.('static_reply', { result: 'no_match' });
+    return next();
+  }
+
+  req.trace?.('static_reply', {
+    result: 'match',
+    ruleId: matchedRule.id,
+    ruleName: matchedRule.name,
+    matchType: matchedRule.matchType,
+    pattern: matchedRule.pattern,
+  });
 
   const isResponsesApi       = body.input !== undefined;
   const isLegacyCompletions  = !isResponsesApi && body.prompt !== undefined && body.messages === undefined;
 
   if (body.stream) {
+    req.trace?.('static_reply_respond', { mode: 'stream', format: isResponsesApi ? 'responses' : isLegacyCompletions ? 'completions' : 'chat' });
     if (isResponsesApi)       return sendResponsesStreamResponse(matchedRule, body, res);
     if (isLegacyCompletions)  return sendCompletionsStreamResponse(matchedRule, body, res);
     return sendChatStreamResponse(matchedRule, body, res);
   }
 
+  req.trace?.('static_reply_respond', { mode: 'json', format: isResponsesApi ? 'responses' : isLegacyCompletions ? 'completions' : 'chat' });
   if (isResponsesApi)       return res.json(buildResponsesApiResponse(matchedRule, body));
   if (isLegacyCompletions)  return res.json(buildCompletionsResponse(matchedRule, body));
   return res.json(buildChatResponse(matchedRule, body));

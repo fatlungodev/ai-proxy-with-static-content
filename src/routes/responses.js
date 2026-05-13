@@ -32,7 +32,7 @@ router.post('/', async (req, res) => {
       return res.status(result.status).json(result.data);
     }
 
-    const upstream = await forwardRequest('/v1/responses', 'POST', body, req.headers);
+    const upstream = await forwardRequest('/v1/responses', 'POST', body, req.headers, req);
     if (body.stream && !upstream.streamFailed) {
       return pipeStream(upstream, req, res, 'responses');
     }
@@ -60,7 +60,7 @@ async function passthrough(req, res, method) {
   if (config.upstream.provider === 'gemini') return geminiUnsupported(req, res);
   try {
     const path = req.originalUrl.split('?')[0]; // /v1/responses/...
-    const upstream = await forwardRequest(path, method, method === 'GET' ? null : req.body, req.headers);
+    const upstream = await forwardRequest(path, method, method === 'GET' ? null : req.body, req.headers, req);
     res.status(upstream.status).json(upstream.data);
   } catch (err) {
     console.error(`[responses ${method}] upstream error:`, err.message);

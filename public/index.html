@@ -179,6 +179,7 @@
       </select>
       <button id="clearBtn">Clear view</button>
       <button id="pauseBtn">Pause</button>
+      <button id="downloadBtn">Download logs</button>
     </div>
 
     <table>
@@ -354,7 +355,7 @@ function renderStatus(s) {
 // ── Request logs ─────────────────────────────────────────────────────────────
 
 async function fetchInitialLogs() {
-  const r = await fetch('/dashboard/logs?limit=200' + (authQS ? '&' + authQS.slice(1) : ''));
+  const r = await fetch('/dashboard/logs?limit=200' + (token ? '&token=' + encodeURIComponent(token) : ''));
   const { entries } = await r.json();
   state.entries = entries;
   render();
@@ -395,7 +396,7 @@ function openDetail(id) {
   const e = state.entries.find(x => x.id === Number(id));
   if (!e) return;
   $('drawerBody').innerHTML = `
-    <div class="row"><div class="k">ID</div><div class="v">${e.id}</div></div>
+    <div class="row"><div class="k">ID</div><div class="v">${esc(e.id)}</div></div>
     <div class="row"><div class="k">Time</div><div class="v">${esc(new Date(e.timestamp).toISOString())}</div></div>
     <div class="row"><div class="k">Method</div><div class="v">${esc(e.method)}</div></div>
     <div class="row"><div class="k">Path</div><div class="v">${esc(e.path)}</div></div>
@@ -410,6 +411,16 @@ function openDetail(id) {
     <pre>${esc(e.requestBody || '(empty)')}</pre>
     <h3 style="margin-top:18px;font-size:13px;color:var(--muted)">Response body</h3>
     <pre>${esc(e.responseBody || (e.stream ? '(streamed — not captured)' : '(empty)'))}</pre>
+    ${e.trace && e.trace.length ? `
+    <h3 style="margin-top:18px;font-size:13px;color:var(--muted)">Request trace</h3>
+    <table style="font-size:12px;width:100%">
+      <thead><tr><th style="text-align:left;padding:4px 8px;color:var(--muted);width:60px">+ms</th><th style="text-align:left;padding:4px 8px;color:var(--muted);width:180px">Event</th><th style="text-align:left;padding:4px 8px;color:var(--muted)">Data</th></tr></thead>
+      <tbody>${e.trace.map(t => `<tr>
+        <td class="mono" style="padding:3px 8px;color:var(--muted)">${esc(t.ms)}</td>
+        <td class="mono" style="padding:3px 8px;color:var(--accent)">${esc(t.event)}</td>
+        <td class="mono" style="padding:3px 8px;word-break:break-all">${esc(JSON.stringify(Object.fromEntries(Object.entries(t).filter(([k]) => k !== 'ms' && k !== 'event'))))}</td>
+      </tr>`).join('')}</tbody>
+    </table>` : ''}
   `;
   $('drawer').classList.add('open');
   $('overlay').classList.add('show');
@@ -576,6 +587,11 @@ $('overlay').addEventListener('click', closeDrawer);
 $('search').addEventListener('input', e => { state.filter = e.target.value; render(); });
 $('levelFilter').addEventListener('change', e => { state.level = e.target.value; render(); });
 $('clearBtn').addEventListener('click', () => { state.entries = []; render(); });
+$('downloadBtn').addEventListener('click', () => {
+  const a = document.createElement('a');
+  a.href = '/dashboard/logs/download' + authQS;
+  a.click();
+});
 $('pauseBtn').addEventListener('click', e => {
   state.paused = !state.paused;
   e.target.textContent = state.paused ? 'Resume' : 'Pause';
