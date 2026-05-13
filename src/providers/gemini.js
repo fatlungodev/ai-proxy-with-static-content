@@ -230,6 +230,7 @@ function pipeChatStream(result, req, res) {
   let buf = '';
   let firstChunk = true;
   let finalUsage = null;
+  const MAX_BUF = 5 * 1024 * 1024; // 5 MB — abort if upstream sends unbounded data
 
   function emit(delta, finishReason) {
     const chunk = {
@@ -244,6 +245,12 @@ function pipeChatStream(result, req, res) {
 
   result.geminiStream.on('data', chunk => {
     buf += chunk.toString('utf8');
+    if (buf.length > MAX_BUF) {
+      console.error('[gemini stream] response buffer exceeded 5 MB limit, aborting stream');
+      if (!res.writableEnded) res.end();
+      result.geminiStream.destroy();
+      return;
+    }
     let sep;
     while ((sep = buf.indexOf('\n\n')) !== -1) {
       const event = buf.slice(0, sep);
@@ -458,6 +465,7 @@ function pipeResponsesStream(result, req, res) {
   let finalUsage = null;
   let started = false;
   let seq = 0;
+  const MAX_BUF = 5 * 1024 * 1024; // 5 MB — abort if upstream sends unbounded data
 
   function send(type, payload) {
     seq += 1;
@@ -488,6 +496,12 @@ function pipeResponsesStream(result, req, res) {
 
   result.geminiStream.on('data', chunk => {
     buf += chunk.toString('utf8');
+    if (buf.length > MAX_BUF) {
+      console.error('[gemini responses stream] response buffer exceeded 5 MB limit, aborting stream');
+      if (!res.writableEnded) res.end();
+      result.geminiStream.destroy();
+      return;
+    }
     let sep;
     while ((sep = buf.indexOf('\n\n')) !== -1) {
       const event = buf.slice(0, sep);
