@@ -66,10 +66,9 @@ app.use('/', express.static(path.join(__dirname, '..', 'public')));
 app.use('/v1', requestLogger);
 app.use('/v1', auth);
 app.use('/v1/models', require('./routes/models'));
-// Static reply check runs before forwarding to upstream LLM
-app.use('/v1/chat', staticReply);
-app.use('/v1/completions', staticReply);
-app.use('/v1/responses', staticReply);
+// Static reply check runs before any route forwards to the upstream LLM.
+// Mounted globally on /v1 so passthrough endpoints are also covered.
+app.use('/v1', staticReply);
 app.use('/v1/chat', require('./routes/chat'));
 app.use('/v1/completions', require('./routes/completions'));
 app.use('/v1/responses', require('./routes/responses'));
@@ -97,6 +96,30 @@ app.use((err, req, res, _next) => {
     error: { message: 'Internal proxy error', type: 'proxy_error' },
   });
 });
+
+// Refuse to start when the dashboard is bound publicly without auth.
+// This stops a default-install from leaking prompt history to the internet.
+const isPublicBind = !['127.0.0.1', 'localhost', '::1'].includes(config.host);
+const dashboardOpen = !process.env.DASHBOARD_PASSWORD && !process.env.DASHBOARD_TOKEN;
+if (isPublicBind && dashboardOpen && process.env.DASHBOARD_OPEN !== 'true') {
+  console.error('FATAL: dashboard would be publicly reachable on ' + config.host + ':' + config.port + ' with no auth.');
+  console.error('       Set DASHBOARD_PASSWORD (recommended) or DASHBOARD_TOKEN in .env, or set HOST=127.0.0.1.');
+  console.error('       To override (NOT recommended for production), set DASHBOARD_OPEN=true.');
+  process.exit(1);
+}
+
+// Warn when UPSTREAM_BASE_URL points at a private/loopback host — common in
+// dev/Ollama setups, but also a SSRF foot-gun if .env is editable by less
+// trusted users. Opt out with ALLOW_PRIVATE_UPSTREAM=true to silence.
+try {
+  const u = new URL(config.upstream.baseUrl);
+  const h = u.hostname;
+  const isPrivate = /^(localhost|127\.|10\.|192\.168\.|169\.254\.|::1$|fc[0-9a-f]{2}:|fe80:)/i.test(h)
+    || /^172\.(1[6-9]|2\d|3[01])\./.test(h);
+  if (isPrivate && process.env.ALLOW_PRIVATE_UPSTREAM !== 'true') {
+    console.warn(`WARNING: UPSTREAM_BASE_URL points at a private host (${h}). Set ALLOW_PRIVATE_UPSTREAM=true to silence.`);
+  }
+} catch { /* invalid URL — let the proxy fail on first request */ }
 
 app.listen(config.port, config.host, () => {
   console.log(`AI Proxy listening on http://${config.host}:${config.port}`);

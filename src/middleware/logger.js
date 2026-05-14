@@ -1,14 +1,39 @@
 const logStore = require('../logStore');
 const config = require('../config');
 
-const MAX_BODY_SNIPPET = 2000; // chars stored per request/response
+const MAX_BODY_SNIPPET = 2000;
+
+// LOG_CAPTURE_BODIES:
+//   off     — never store request/response bodies
+//   snippet — store redacted, truncated bodies (default)
+//   full    — store redacted bodies untruncated (still subject to MAX_BODY_SNIPPET cap × 4)
+const CAPTURE_BODIES = (process.env.LOG_CAPTURE_BODIES || 'snippet').toLowerCase();
+const BODY_LIMIT = CAPTURE_BODIES === 'full' ? MAX_BODY_SNIPPET * 4 : MAX_BODY_SNIPPET;
+
+const SENSITIVE_KEY = /^(authorization|api[_-]?key|password|passwd|secret|token|access[_-]?token|refresh[_-]?token|cookie|x[_-]api[_-]key|x[_-]auth[_-]token|set[_-]cookie|bearer)$/i;
+
+function redact(value, depth = 0) {
+  if (depth > 6 || value == null) return value;
+  if (Array.isArray(value)) return value.map(v => redact(v, depth + 1));
+  if (typeof value !== 'object') return value;
+  const out = {};
+  for (const [k, v] of Object.entries(value)) {
+    if (SENSITIVE_KEY.test(k)) {
+      out[k] = '[REDACTED]';
+    } else {
+      out[k] = redact(v, depth + 1);
+    }
+  }
+  return out;
+}
 
 function snippet(obj) {
-  if (obj == null) return null;
+  if (CAPTURE_BODIES === 'off' || obj == null) return null;
+  const safe = typeof obj === 'object' ? redact(obj) : obj;
   let s;
-  try { s = typeof obj === 'string' ? obj : JSON.stringify(obj); }
-  catch { s = String(obj); }
-  if (s.length > MAX_BODY_SNIPPET) s = s.slice(0, MAX_BODY_SNIPPET) + '… (truncated)';
+  try { s = typeof safe === 'string' ? safe : JSON.stringify(safe); }
+  catch { s = String(safe); }
+  if (s.length > BODY_LIMIT) s = s.slice(0, BODY_LIMIT) + '… (truncated)';
   return s;
 }
 
@@ -34,7 +59,6 @@ module.exports = function logger(req, res, next) {
     trace: [],
   };
 
-  // Expose the entry and a trace helper to downstream middleware and route handlers.
   req._proxyEntry = entry;
   req.trace = (event, data = {}) => {
     entry.trace.push({ ms: Date.now() - start, event, ...data });
@@ -42,6 +66,9 @@ module.exports = function logger(req, res, next) {
       console.log(`[trace] ${req.method} ${req.path} +${Date.now() - start}ms ${event}`, data);
     }
   };
+  // Downstream modules (streamPipe, passthrough) use this to attach response bodies.
+  req.setResponseBody = (body) => { entry.responseBody = snippet(body); };
+  req.setError = (msg) => { if (!entry.error) entry.error = String(msg); };
 
   // Intercept res.json to capture response body (non-stream path)
   const originalJson = res.json.bind(res);
@@ -51,7 +78,6 @@ module.exports = function logger(req, res, next) {
     return originalJson(data);
   };
 
-  // Capture byte counts and finalize on response end
   let bytesOut = 0;
   const origWrite = res.write.bind(res);
   res.write = (chunk, ...rest) => {

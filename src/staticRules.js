@@ -131,27 +131,31 @@ function remove(id) {
 function extractPromptText(body) {
   if (!body) return '';
 
-  // /v1/chat/completions
+  // /v1/chat/completions — only consider user / system messages so rules
+  // don't match on the assistant's prior outputs in a multi-turn chat.
   if (Array.isArray(body.messages)) {
-    return body.messages.map(m => {
-      if (typeof m.content === 'string') return m.content;
-      if (Array.isArray(m.content)) {
-        return m.content.filter(c => c.type === 'text').map(c => c.text).join(' ');
-      }
-      return '';
-    }).join('\n');
+    return body.messages
+      .filter(m => m.role === 'user' || m.role === 'system')
+      .map(m => {
+        if (typeof m.content === 'string') return m.content;
+        if (Array.isArray(m.content)) {
+          return m.content.filter(c => c.type === 'text').map(c => c.text).join(' ');
+        }
+        return '';
+      }).join('\n');
   }
 
   // /v1/completions (legacy)
   if (typeof body.prompt === 'string') return body.prompt;
   if (Array.isArray(body.prompt)) return body.prompt.join('\n');
 
-  // /v1/responses
+  // /v1/responses — skip assistant outputs in conversation history.
   if (typeof body.input === 'string') return body.input;
   if (Array.isArray(body.input)) {
     return body.input.map(item => {
       if (typeof item === 'string') return item;
       if (item.type === 'message') {
+        if (item.role && item.role !== 'user' && item.role !== 'system') return '';
         // content may be a plain string (n8n, OpenAI SDK simple form) or an array of parts
         if (typeof item.content === 'string') return item.content;
         if (Array.isArray(item.content)) {

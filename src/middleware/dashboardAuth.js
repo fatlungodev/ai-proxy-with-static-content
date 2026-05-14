@@ -1,6 +1,14 @@
 const crypto = require('crypto');
 
 const COOKIE_NAME = '_aip_sess';
+const SESSION_MAX_AGE_SECONDS = parseInt(process.env.DASHBOARD_SESSION_MAX_AGE || String(7 * 24 * 60 * 60), 10);
+
+function cookieFlags(req, maxAgeSeconds = SESSION_MAX_AGE_SECONDS) {
+  const proxiedHttps = req.headers['x-forwarded-proto'] === 'https';
+  const forceSecure = process.env.DASHBOARD_FORCE_SECURE_COOKIE === 'true';
+  const secure = req.secure || proxiedHttps || forceSecure;
+  return `Path=/; HttpOnly; SameSite=Strict${secure ? '; Secure' : ''}; Max-Age=${maxAgeSeconds}`;
+}
 
 function parseCookies(cookieHeader) {
   const out = {};
@@ -63,4 +71,4 @@ function requireAuth(req, res, next) {
   res.status(401).json({ error: 'Unauthorized' });
 }
 
-module.exports = { isAuthenticated, expectedToken, parseCookies, requireAuth, safeEqual, COOKIE_NAME };
+module.exports = { isAuthenticated, expectedToken, parseCookies, requireAuth, safeEqual, COOKIE_NAME, cookieFlags };

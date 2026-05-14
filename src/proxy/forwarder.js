@@ -2,6 +2,8 @@ const axios = require('axios');
 const config = require('../config');
 const { axiosProxyOptions } = require('./httpClient');
 
+const MAX_RESPONSE_BYTES = parseInt(process.env.UPSTREAM_MAX_RESPONSE_BYTES || String(50 * 1024 * 1024), 10);
+
 function buildUpstreamHeaders(originalHeaders) {
   const headers = {
     'Content-Type': 'application/json',
@@ -19,14 +21,6 @@ function buildUpstreamHeaders(originalHeaders) {
   ];
   for (const h of forward) {
     if (originalHeaders[h]) headers[h] = originalHeaders[h];
-  }
-
-  // Anthropic-specific auth (note: schema translation is NOT performed —
-  // OpenAI-shaped requests will fail against Anthropic's /v1/messages API)
-  if (config.upstream.provider === 'anthropic') {
-    headers['anthropic-version'] = '2023-06-01';
-    headers['x-api-key'] = config.upstream.apiKey;
-    delete headers.Authorization;
   }
 
   return headers;
@@ -65,6 +59,8 @@ async function forwardRequest(path, method, body, reqHeaders, req) {
     timeout: config.upstream.timeout,
     responseType: isStream ? 'stream' : 'json',
     validateStatus: () => true,
+    maxContentLength: MAX_RESPONSE_BYTES,
+    maxBodyLength: MAX_RESPONSE_BYTES,
     ...axiosProxyOptions(url),
   });
 
