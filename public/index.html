@@ -558,6 +558,36 @@ function defuseFormula(s) {
   return /^[=+\-@\t\r]/.test(s) ? "'" + s : s;
 }
 
+// Encode/decode \n, \r, \t and literal backslash so each rule lives on a
+// single CSV line. A multi-line response like "hello\nworld" becomes the
+// 12-character sequence  h e l l o \ n w o r l d  in the CSV, and decodes
+// back to a real newline on import. Backslashes are doubled so a regex
+// pattern like \w+ round-trips cleanly through the encode/decode pair.
+function encodeEscapes(s) {
+  if (typeof s !== 'string') return s;
+  return s
+    .replace(/\\/g, '\\\\')
+    .replace(/\r/g, '\\r')
+    .replace(/\n/g, '\\n')
+    .replace(/\t/g, '\\t');
+}
+
+function decodeEscapes(s) {
+  if (typeof s !== 'string') return s;
+  let out = '';
+  for (let i = 0; i < s.length; i++) {
+    if (s[i] === '\\' && i + 1 < s.length) {
+      const next = s[i + 1];
+      if (next === 'n')  { out += '\n'; i++; continue; }
+      if (next === 'r')  { out += '\r'; i++; continue; }
+      if (next === 't')  { out += '\t'; i++; continue; }
+      if (next === '\\') { out += '\\'; i++; continue; }
+    }
+    out += s[i];
+  }
+  return out;
+}
+
 function exportRules() {
   // id and createdAt are server-side — strip on export so the importer
   // assigns fresh values and two systems can't collide on UUIDs.
@@ -565,9 +595,9 @@ function exportRules() {
   for (const r of rules) {
     lines.push(RULE_CSV_HEADERS.map(h => {
       let v;
-      if (h === 'enabled') v = r.enabled ? 'true' : 'false';
+      if (h === 'enabled')      v = r.enabled ? 'true' : 'false';
       else if (h === 'delayMs') v = Number(r.delayMs) || 0;
-      else v = r[h];
+      else                      v = encodeEscapes(r[h]); // name / pattern / response
       return escapeCsv(defuseFormula(v));
     }).join(','));
   }
@@ -676,10 +706,13 @@ async function onImportFile(e) {
       enabledWarnings.push({ row: idx + 2, value: String(obj.enabled) }); // +2 = +1 for header, +1 for 1-based
     }
     return {
-      name: reverseDefuseFormula(String(obj.name || 'Untitled').trim()),
+      // Order matters: reverse formula-defuse FIRST (strip leading apostrophe
+      // before a dangerous char), THEN decode escape sequences so any \n in
+      // the raw text becomes an actual newline in the rule.
+      name: decodeEscapes(reverseDefuseFormula(String(obj.name || 'Untitled').trim())),
       matchType: String(obj.matchtype || 'contains').trim().toLowerCase(),
-      pattern: reverseDefuseFormula(obj.pattern),
-      response: reverseDefuseFormula(obj.response),
+      pattern: decodeEscapes(reverseDefuseFormula(obj.pattern)),
+      response: decodeEscapes(reverseDefuseFormula(obj.response)),
       enabled: enabledParsed === null ? true : enabledParsed, // fall back to enabled, but warn
       delayMs: parseInt(String(obj.delayms || '0').trim(), 10) || 0,
     };
