@@ -10,9 +10,13 @@ if [ ! -f .env ]; then
   exit 1
 fi
 
+# Persistent data directory (rules, request logs, app events).
+mkdir -p "$PROJECT_ROOT/data"
+
 sudo docker run -d \
   --name ai-proxy \
   --restart always \
   -p 3005:3005 \
   --env-file .env \
+  -v "$PROJECT_ROOT/data":/app/data \
   ai-proxy

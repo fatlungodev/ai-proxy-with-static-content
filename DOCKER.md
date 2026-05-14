@@ -81,10 +81,12 @@ auto-anchor to the project root, so you can invoke them from anywhere.
     > You must provide the `.env` file at runtime since it's not baked into the image for security.
 
     ```bash
+    mkdir -p data
     docker run -d \
       --name ai-proxy \
       -p 3005:3005 \
       --env-file .env \
+      -v "$(pwd)/data":/app/data \
       ai-proxy
     ```
 
@@ -101,6 +103,22 @@ docker build \
   --build-arg APP_REPO_URL=https://github.com/your-user/your-fork.git \
   -t ai-proxy -f docker/Dockerfile .
 ```
+
+## 💾 Persistent Data
+
+The container mounts `./data` (relative to the project root) to `/app/data` inside the container. This directory holds:
+
+| File | Purpose |
+|------|---------|
+| `rules.json` | Static reply rules managed via the dashboard |
+| `requests.log.jsonl` | One JSON object per request (auth, trace, request/response bodies) |
+| `app-events.log.jsonl` | Application lifecycle events (rule changes, startup, errors) |
+
+The two `.jsonl` files rotate at **100 MB** by default to `*.jsonl.1`. Override with `LOG_FILE_MAX_BYTES` in `.env` if you need a different cap.
+
+On startup the proxy re-hydrates the in-memory ring buffer with the most recent `LOG_BUFFER_SIZE` requests (default 500) and `200` app events from these files, so dashboard history survives container restarts and rebuilds.
+
+To back up: copy the entire `data/` folder. To start clean: stop the container, delete `data/`, restart.
 
 ## 🔍 Monitoring & Maintenance
 
