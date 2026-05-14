@@ -3,7 +3,7 @@ const logStore = require('../logStore');
 const config = require('../config');
 const httpClient = require('../proxy/httpClient');
 const staticRules = require('../staticRules');
-const { isAuthenticated, expectedToken, requireAuth, safeEqual, COOKIE_NAME } = require('../middleware/dashboardAuth');
+const { isAuthenticated, expectedToken, requireAuth, safeEqual, COOKIE_NAME, cookieFlags } = require('../middleware/dashboardAuth');
 
 const router = express.Router();
 
@@ -12,6 +12,16 @@ const router = express.Router();
 const loginAttempts = new Map(); // ip -> { count, lockedUntil }
 const MAX_LOGIN_ATTEMPTS = 10;
 const LOCKOUT_MS = 15 * 60 * 1000; // 15 minutes
+const MAX_ATTEMPT_ENTRIES = 10_000;
+
+// Periodically drop expired entries so a spray of unique source IPs can't
+// grow the map indefinitely.
+setInterval(() => {
+  const now = Date.now();
+  for (const [ip, entry] of loginAttempts) {
+    if (now > entry.lockedUntil) loginAttempts.delete(ip);
+  }
+}, 60_000).unref();
 
 function getClientIp(req) {
   return req.ip || (req.connection && req.connection.remoteAddress) || 'unknown';
@@ -25,6 +35,12 @@ function isLoginRateLimited(ip) {
 }
 
 function recordLoginFailure(ip) {
+  // Hard cap on map size to defend against unique-IP-spray DoS.
+  if (loginAttempts.size >= MAX_ATTEMPT_ENTRIES && !loginAttempts.has(ip)) {
+    // Drop oldest entry — Map iteration order is insertion order.
+    const firstKey = loginAttempts.keys().next().value;
+    if (firstKey) loginAttempts.delete(firstKey);
+  }
   const now = Date.now();
   const entry = loginAttempts.get(ip) || { count: 0, lockedUntil: now + LOCKOUT_MS };
   entry.count++;
@@ -33,11 +49,6 @@ function recordLoginFailure(ip) {
 }
 
 // ── Login / logout (no auth required) ────────────────────────────────────────
-
-function cookieFlags(req) {
-  const secure = req.secure || req.headers['x-forwarded-proto'] === 'https';
-  return `Path=/; HttpOnly; SameSite=Strict${secure ? '; Secure' : ''}`;
-}
 
 router.post('/login', express.urlencoded({ extended: false }), (req, res) => {
   const password = process.env.DASHBOARD_PASSWORD;
@@ -61,7 +72,7 @@ router.post('/login', express.urlencoded({ extended: false }), (req, res) => {
 });
 
 router.get('/logout', (req, res) => {
-  res.setHeader('Set-Cookie', `${COOKIE_NAME}=; ${cookieFlags(req)}; Max-Age=0`);
+  res.setHeader('Set-Cookie', `${COOKIE_NAME}=; ${cookieFlags(req, 0)}`);
   res.redirect('/login');
 });
 

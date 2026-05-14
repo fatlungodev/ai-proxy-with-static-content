@@ -1,5 +1,7 @@
 // In-memory ring buffer for recent requests/responses/errors, with JSONL
 // persistence to data/ so logs and app events survive container restarts.
+// Writes are async-serialised per-file to avoid blocking the event loop on
+// the hot response-finish path.
 
 const fs = require('fs');
 const path = require('path');
@@ -13,19 +15,15 @@ const REQUESTS_FILE = path.join(DATA_DIR, 'requests.log.jsonl');
 const APP_EVENTS_FILE = path.join(DATA_DIR, 'app-events.log.jsonl');
 
 const state = {
-  entries: [],          // newest last
+  entries: [],
   nextId: 1,
   startedAt: Date.now(),
-  totals: {
-    requests: 0,
-    errors: 0,
-    streaming: 0,
-    bytesIn: 0,
-    bytesOut: 0,
-  },
-  subscribers: new Set(), // each is a function(entry)
-  appEvents: [],          // application-level lifecycle events (startup, rule changes, errors)
+  totals: { requests: 0, errors: 0, streaming: 0, bytesIn: 0, bytesOut: 0 },
+  subscribers: new Set(),
+  appEvents: [],
 };
+
+// ── Persistence ──────────────────────────────────────────────────────────────
 
 function ensureDataDir() {
   try {
@@ -35,56 +33,84 @@ function ensureDataDir() {
   }
 }
 
-// Rotate <file> → <file>.1 when it exceeds the size cap. Keeps one rotated
-// generation, so on-disk usage is bounded by ~2 × MAX_LOG_FILE_BYTES per file.
-function rotateIfNeeded(file) {
+async function maybeRotate(file) {
   try {
-    if (!fs.existsSync(file)) return;
-    if (fs.statSync(file).size <= MAX_LOG_FILE_BYTES) return;
+    const stat = await fs.promises.stat(file);
+    if (stat.size <= MAX_LOG_FILE_BYTES) return;
     const old = file + '.1';
-    try { fs.unlinkSync(old); } catch { /* ignore — may not exist */ }
-    fs.renameSync(file, old);
+    try { await fs.promises.unlink(old); } catch { /* may not exist */ }
+    await fs.promises.rename(file, old);
   } catch (err) {
-    console.error('[logStore] log rotation failed:', err.message);
+    if (err.code !== 'ENOENT') {
+      console.error('[logStore] rotation failed:', err.message);
+    }
   }
 }
 
+// One async chain per file ensures writes stay ordered and rotation can't
+// race with appends — but writes never block the event loop.
+const writeChains = { [REQUESTS_FILE]: Promise.resolve(), [APP_EVENTS_FILE]: Promise.resolve() };
 let appendErrorWarned = false;
+
 function appendLine(file, obj) {
-  try {
-    rotateIfNeeded(file);
-    fs.appendFileSync(file, JSON.stringify(obj) + '\n');
-  } catch (err) {
-    if (!appendErrorWarned) {
-      console.error('[logStore] failed to persist log:', err.message);
-      appendErrorWarned = true;
+  writeChains[file] = writeChains[file].then(async () => {
+    try {
+      await maybeRotate(file);
+      await fs.promises.appendFile(file, JSON.stringify(obj) + '\n');
+    } catch (err) {
+      if (!appendErrorWarned) {
+        console.error('[logStore] failed to persist log:', err.message);
+        appendErrorWarned = true;
+      }
     }
-  }
+  });
 }
 
-function readLastLines(file, n) {
-  if (!fs.existsSync(file)) return [];
+// Read the last N JSON-parseable lines from a JSONL file by scanning from the
+// end in 64 KB chunks — bounds memory regardless of file size.
+function readLastLinesSync(file, n) {
+  let fd;
   try {
-    const content = fs.readFileSync(file, 'utf8');
-    const lines = content.split('\n');
-    const out = [];
-    // Walk from the end so we stop as soon as we have N valid entries.
-    for (let i = lines.length - 1; i >= 0 && out.length < n; i--) {
-      const line = lines[i];
-      if (!line) continue;
-      try { out.push(JSON.parse(line)); } catch { /* skip malformed line */ }
+    fd = fs.openSync(file, 'r');
+  } catch (err) {
+    if (err.code === 'ENOENT') return [];
+    console.error('[logStore] failed to open log file:', err.message);
+    return [];
+  }
+  try {
+    const CHUNK = 64 * 1024;
+    const buf = Buffer.allocUnsafe(CHUNK);
+    let pos = fs.fstatSync(fd).size;
+    let remainder = '';
+    const lines = [];
+    while (pos > 0 && lines.length < n) {
+      const readSize = Math.min(CHUNK, pos);
+      pos -= readSize;
+      fs.readSync(fd, buf, 0, readSize, pos);
+      const text = buf.toString('utf8', 0, readSize) + remainder;
+      const parts = text.split('\n');
+      remainder = parts.shift();
+      for (let i = parts.length - 1; i >= 0 && lines.length < n; i--) {
+        if (!parts[i]) continue;
+        try { lines.push(JSON.parse(parts[i])); } catch { /* skip malformed */ }
+      }
     }
-    return out.reverse();
+    if (remainder && lines.length < n) {
+      try { lines.push(JSON.parse(remainder)); } catch { /* skip */ }
+    }
+    return lines.reverse();
   } catch (err) {
     console.error('[logStore] failed to read log file:', err.message);
     return [];
+  } finally {
+    try { fs.closeSync(fd); } catch { /* ignore */ }
   }
 }
 
 function loadPersistedState() {
   ensureDataDir();
 
-  const entries = readLastLines(REQUESTS_FILE, MAX_ENTRIES);
+  const entries = readLastLinesSync(REQUESTS_FILE, MAX_ENTRIES);
   for (const e of entries) {
     state.entries.push(e);
     if (typeof e.id === 'number' && e.id >= state.nextId) state.nextId = e.id + 1;
@@ -95,8 +121,10 @@ function loadPersistedState() {
     state.totals.bytesOut += e.bytesOut || 0;
   }
 
-  state.appEvents.push(...readLastLines(APP_EVENTS_FILE, MAX_APP_EVENTS));
+  state.appEvents.push(...readLastLinesSync(APP_EVENTS_FILE, MAX_APP_EVENTS));
 }
+
+// ── Public API ───────────────────────────────────────────────────────────────
 
 function add(entry) {
   entry.id = state.nextId++;
@@ -114,7 +142,7 @@ function add(entry) {
   appendLine(REQUESTS_FILE, entry);
 
   for (const fn of state.subscribers) {
-    try { fn(entry); } catch (e) { /* ignore subscriber errors */ }
+    try { fn(entry); } catch { /* ignore subscriber errors */ }
   }
 }
 
@@ -140,7 +168,6 @@ function subscribe(fn) {
   return () => state.subscribers.delete(fn);
 }
 
-// Record an application-level event (not tied to a specific request).
 function logApp(type, data = {}) {
   const event = { ts: new Date().toISOString(), type, ...data };
   state.appEvents.push(event);

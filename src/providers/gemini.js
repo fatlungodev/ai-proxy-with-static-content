@@ -247,7 +247,13 @@ function pipeChatStream(result, req, res) {
     buf += chunk.toString('utf8');
     if (buf.length > MAX_BUF) {
       console.error('[gemini stream] response buffer exceeded 5 MB limit, aborting stream');
-      if (!res.writableEnded) res.end();
+      if (!res.writableEnded) {
+        try {
+          res.write(`data: ${JSON.stringify({ error: { message: 'upstream stream exceeded buffer limit', type: 'proxy_error' } })}\n\n`);
+          res.write('data: [DONE]\n\n');
+        } catch { /* socket gone */ }
+        res.end();
+      }
       result.geminiStream.destroy();
       return;
     }
@@ -498,7 +504,12 @@ function pipeResponsesStream(result, req, res) {
     buf += chunk.toString('utf8');
     if (buf.length > MAX_BUF) {
       console.error('[gemini responses stream] response buffer exceeded 5 MB limit, aborting stream');
-      if (!res.writableEnded) res.end();
+      if (!res.writableEnded) {
+        try {
+          res.write(`event: error\ndata: ${JSON.stringify({ error: { message: 'upstream stream exceeded buffer limit', type: 'proxy_error' } })}\n\n`);
+        } catch { /* socket gone */ }
+        res.end();
+      }
       result.geminiStream.destroy();
       return;
     }

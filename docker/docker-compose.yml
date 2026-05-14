@@ -13,3 +13,9 @@ services:
     # Survives container restart and rebuild. Inspect/back up files in ../data/.
     volumes:
       - ../data:/app/data
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3005/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
