@@ -227,7 +227,7 @@
       <span style="color:var(--muted);font-size:13px">Intercept incoming prompts and return a pre-defined message without hitting the upstream LLM.</span>
       <button id="exportRulesBtn" style="margin-left:auto">Export</button>
       <button id="importRulesBtn">Import</button>
-      <input type="file" id="importFileInput" accept="application/json,.json" style="display:none">
+      <input type="file" id="importFileInput" accept=".csv,text/csv" style="display:none">
       <button id="addRuleBtn" class="btn primary">+ Add Rule</button>
     </div>
 
@@ -546,41 +546,118 @@ async function fetchRules() {
   } catch {}
 }
 
+const RULE_CSV_HEADERS = ['name', 'matchType', 'pattern', 'response', 'enabled', 'delayMs'];
+
 function exportRules() {
-  // Strip id and createdAt — those are re-assigned on import.
-  const stripped = rules.map(r => ({
-    name: r.name,
-    matchType: r.matchType,
-    pattern: r.pattern,
-    response: r.response,
-    enabled: r.enabled,
-    delayMs: Number(r.delayMs) || 0,
-  }));
-  const bundle = { version: 1, exportedAt: new Date().toISOString(), rules: stripped };
-  const blob = new Blob([JSON.stringify(bundle, null, 2)], { type: 'application/json' });
+  // id and createdAt are server-side — strip on export so the importer
+  // assigns fresh values and two systems can't collide on UUIDs.
+  const lines = [RULE_CSV_HEADERS.join(',')];
+  for (const r of rules) {
+    lines.push(RULE_CSV_HEADERS.map(h => {
+      if (h === 'enabled') return escapeCsv(r.enabled ? 'true' : 'false');
+      if (h === 'delayMs') return escapeCsv(Number(r.delayMs) || 0);
+      return escapeCsv(r[h]);
+    }).join(','));
+  }
+  // Prepend UTF-8 BOM so Excel auto-detects encoding for non-ASCII responses.
+  const blob = new Blob(['﻿' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = `ai-proxy-rules-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
+  a.download = `ai-proxy-rules-${new Date().toISOString().replace(/[:.]/g, '-')}.csv`;
   a.click();
   URL.revokeObjectURL(url);
+}
+
+// RFC 4180-compliant CSV parser. Handles quoted fields with embedded commas,
+// double-quoted escaped quotes, CRLF / LF / CR record separators, and a UTF-8 BOM.
+function parseCsv(text) {
+  if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
+  const rows = [];
+  let row = [], field = '', inQuotes = false, i = 0;
+  while (i < text.length) {
+    const c = text[i];
+    if (inQuotes) {
+      if (c === '"') {
+        if (text[i + 1] === '"') { field += '"'; i += 2; continue; }
+        inQuotes = false; i++; continue;
+      }
+      field += c; i++;
+    } else {
+      if (c === '"' && field === '') { inQuotes = true; i++; }
+      else if (c === ',') { row.push(field); field = ''; i++; }
+      else if (c === '\r' || c === '\n') {
+        row.push(field); rows.push(row); row = []; field = '';
+        if (c === '\r' && text[i + 1] === '\n') i += 2; else i++;
+      } else { field += c; i++; }
+    }
+  }
+  if (field !== '' || row.length > 0) { row.push(field); rows.push(row); }
+  return rows;
+}
+
+function parseBoolean(v) {
+  if (v == null) return true;
+  const s = String(v).trim().toLowerCase();
+  if (s === '') return true; // blank defaults to enabled
+  return !['false', 'no', '0', 'off', 'disabled'].includes(s);
 }
 
 async function onImportFile(e) {
   const file = e.target.files[0];
   if (!file) return;
-  let incoming;
-  try {
-    const text = await file.text();
-    const parsed = JSON.parse(text);
-    incoming = Array.isArray(parsed) ? parsed : (parsed.rules || []);
-  } catch (err) {
-    alert('Invalid JSON file: ' + err.message);
+  let text;
+  try { text = await file.text(); }
+  catch (err) {
+    alert('Cannot read file: ' + err.message);
     e.target.value = '';
     return;
   }
-  if (!Array.isArray(incoming) || !incoming.length) {
-    alert('No rules found in the file.');
+
+  let parsedRows;
+  try { parsedRows = parseCsv(text); }
+  catch (err) {
+    alert('Invalid CSV: ' + err.message);
+    e.target.value = '';
+    return;
+  }
+
+  if (!parsedRows.length) {
+    alert('CSV file is empty.');
+    e.target.value = '';
+    return;
+  }
+
+  const headers = parsedRows[0].map(h => h.trim().toLowerCase());
+  const required = ['name', 'matchtype', 'pattern', 'response'];
+  const missing = required.filter(h => !headers.includes(h));
+  if (missing.length) {
+    alert(
+      `Missing required column(s): ${missing.join(', ')}\n\n` +
+      `CSV must have a header row with columns:\n` +
+      `  name, matchType, pattern, response  (required)\n` +
+      `  enabled, delayMs                    (optional)`
+    );
+    e.target.value = '';
+    return;
+  }
+
+  const dataRows = parsedRows.slice(1).filter(row => row.some(c => String(c).trim() !== ''));
+  const incoming = dataRows.map(row => {
+    const obj = {};
+    headers.forEach((h, i) => obj[h] = row[i] != null ? row[i] : '');
+    return {
+      name: String(obj.name || 'Untitled').trim(),
+      matchType: String(obj.matchtype || 'contains').trim().toLowerCase(),
+      pattern: obj.pattern,
+      response: obj.response,
+      enabled: parseBoolean(obj.enabled),
+      delayMs: parseInt(String(obj.delayms || '0').trim(), 10) || 0,
+    };
+  });
+
+  if (!incoming.length) {
+    alert('No data rows found (only a header row?).');
     e.target.value = '';
     return;
   }
