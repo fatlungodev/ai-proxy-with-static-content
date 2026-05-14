@@ -200,11 +200,6 @@ module.exports = function staticReplyMiddleware(req, res, next) {
 
   req.trace?.('static_reply_delay_start', { mode, format, delayMs: delay });
   const timer = setTimeout(() => {
-    // Only check the response side. req.destroyed is set to true by Node 18+
-    // shortly after the request body is fully consumed even when the
-    // connection is healthy, so checking it here would silently drop every
-    // delayed reply. Client-disconnect during the delay is handled via the
-    // req.on('close') listener below.
     if (res.destroyed || res.writableEnded) {
       req.trace?.('static_reply_delay_aborted', { delayMs: delay });
       return;
@@ -214,7 +209,11 @@ module.exports = function staticReplyMiddleware(req, res, next) {
       req.trace?.('static_reply_error', { error: err.message });
     }
   }, delay);
-  const onClose = () => clearTimeout(timer);
-  req.on('close', onClose);
-  res.on('finish', () => req.off('close', onClose));
+  // Use res.on('close') — not req.on('close') — to detect real client
+  // disconnects during the delay. On Node 18+/Express, req emits 'close'
+  // synchronously right after body-parser consumes the request body (even
+  // on a healthy connection), which would silently cancel every delayed
+  // reply. res emits 'close' only when the response is finished or the
+  // underlying socket is destroyed, which is what we actually want.
+  res.on('close', () => clearTimeout(timer));
 };
