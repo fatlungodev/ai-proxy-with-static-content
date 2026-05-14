@@ -77,6 +77,16 @@
   .overlay { position: fixed; inset: 0; background: rgba(0,0,0,.4); display: none; z-index: 9; }
   .overlay.show { display: block; }
   .empty { text-align: center; color: var(--muted); padding: 40px; }
+  .pagination {
+    display: none; align-items: center; justify-content: center; gap: 12px;
+    margin-top: 12px; color: var(--muted); font-size: 12px;
+  }
+  .pagination button {
+    background: var(--panel-2); color: var(--text); border: 1px solid var(--border);
+    border-radius: 6px; padding: 6px 12px; font-size: 12px; font-family: inherit; cursor: pointer;
+  }
+  .pagination button:hover:not(:disabled) { border-color: var(--accent); }
+  .pagination button:disabled { opacity: .4; cursor: not-allowed; }
   .live-indicator { color: var(--muted); font-size: 12px; margin-left: auto; display: flex; align-items: center; gap: 6px; }
   .pulse { width: 7px; height: 7px; background: var(--ok); border-radius: 50%; animation: pulse 1.6s infinite; }
   @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .3; } }
@@ -177,8 +187,14 @@
         <option value="">All</option>
         <option value="error">Errors only</option>
       </select>
+      <select id="pageSize" title="Entries per page">
+        <option value="20">20 / page</option>
+        <option value="50">50 / page</option>
+        <option value="100">100 / page</option>
+      </select>
       <button id="clearBtn">Clear view</button>
       <button id="pauseBtn">Pause</button>
+      <button id="exportCsvBtn">Export CSV</button>
       <button id="downloadBtn">Download logs</button>
     </div>
 
@@ -198,6 +214,11 @@
       <tbody id="logBody"></tbody>
     </table>
     <div id="emptyState" class="empty">No requests yet. Send something to <span class="mono">/v1/...</span> to see it here.</div>
+    <div id="pagination" class="pagination">
+      <button id="prevPageBtn">← Prev</button>
+      <span id="pageInfo" class="mono"></span>
+      <button id="nextPageBtn">Next →</button>
+    </div>
   </div>
 
   <!-- ── Static Replies tab ──────────────────────────────────────────────── -->
@@ -287,6 +308,8 @@ const state = {
   paused: false,
   filter: '',
   level: '',
+  page: 1,
+  pageSize: Number(localStorage.getItem('logsPageSize')) || 20,
 };
 
 const $ = id => document.getElementById(id);
@@ -366,6 +389,36 @@ async function fetchInitialLogs() {
   render();
 }
 
+function escapeCsv(v) {
+  if (v === null || v === undefined) return '';
+  const s = typeof v === 'string' ? v : (typeof v === 'object' ? JSON.stringify(v) : String(v));
+  return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+
+function exportCsv() {
+  const filtered = applyFilter(state.entries).slice().reverse();
+  const start = (state.page - 1) * state.pageSize;
+  const rows = filtered.slice(start, start + state.pageSize);
+  if (!rows.length) return;
+  const headers = ['id','timestamp','method','path','model','stream','status','durationMs','error','bytesIn','bytesOut','clientIp','requestBody','responseBody','trace'];
+  const lines = [headers.join(',')];
+  for (const e of rows) {
+    lines.push(headers.map(h => {
+      if (h === 'timestamp') return escapeCsv(new Date(e.timestamp).toISOString());
+      if (h === 'stream')    return escapeCsv(e.stream ? 'yes' : 'no');
+      if (h === 'trace')     return escapeCsv(e.trace || []);
+      return escapeCsv(e[h]);
+    }).join(','));
+  }
+  const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `ai-proxy-logs-page${state.page}-${new Date().toISOString().replace(/[:.]/g,'-')}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 function applyFilter(rows) {
   let out = rows;
   if (state.level === 'error') out = out.filter(e => e.error || (e.status && e.status >= 400));
@@ -381,9 +434,14 @@ function applyFilter(rows) {
 }
 
 function render() {
-  const rows = applyFilter(state.entries);
-  $('emptyState').style.display = rows.length ? 'none' : 'block';
-  $('logBody').innerHTML = rows.slice().reverse().map(e => `
+  const filtered = applyFilter(state.entries).slice().reverse();
+  const totalPages = Math.max(1, Math.ceil(filtered.length / state.pageSize));
+  if (state.page > totalPages) state.page = totalPages;
+  const start = (state.page - 1) * state.pageSize;
+  const pageRows = filtered.slice(start, start + state.pageSize);
+
+  $('emptyState').style.display = filtered.length ? 'none' : 'block';
+  $('logBody').innerHTML = pageRows.map(e => `
     <tr data-id="${e.id}" class="${e.error || (e.status && e.status >= 400) ? 'error' : ''}">
       <td class="mono">${fmtTime(e.timestamp)}</td>
       <td><span class="pill info">${esc(e.method)}</span></td>
@@ -395,6 +453,16 @@ function render() {
       <td class="truncate" title="${esc(e.error)}">${esc(e.error)}</td>
     </tr>
   `).join('');
+  renderPagination(filtered.length, totalPages);
+}
+
+function renderPagination(total, totalPages) {
+  const show = total > state.pageSize;
+  $('pagination').style.display = show ? 'flex' : 'none';
+  if (!show) return;
+  $('pageInfo').textContent = `Page ${state.page} of ${totalPages} · ${total} entries`;
+  $('prevPageBtn').disabled = state.page <= 1;
+  $('nextPageBtn').disabled = state.page >= totalPages;
 }
 
 function openDetail(id) {
@@ -601,9 +669,18 @@ $('logBody').addEventListener('click', e => {
 });
 $('drawerClose').addEventListener('click', closeDrawer);
 $('overlay').addEventListener('click', closeDrawer);
-$('search').addEventListener('input', e => { state.filter = e.target.value; render(); });
-$('levelFilter').addEventListener('change', e => { state.level = e.target.value; render(); });
-$('clearBtn').addEventListener('click', () => { state.entries = []; render(); });
+$('search').addEventListener('input', e => { state.filter = e.target.value; state.page = 1; render(); });
+$('levelFilter').addEventListener('change', e => { state.level = e.target.value; state.page = 1; render(); });
+$('clearBtn').addEventListener('click', () => { state.entries = []; state.page = 1; render(); });
+$('pageSize').addEventListener('change', e => {
+  state.pageSize = Number(e.target.value) || 20;
+  state.page = 1;
+  localStorage.setItem('logsPageSize', String(state.pageSize));
+  render();
+});
+$('prevPageBtn').addEventListener('click', () => { if (state.page > 1) { state.page--; render(); } });
+$('nextPageBtn').addEventListener('click', () => { state.page++; render(); });
+$('exportCsvBtn').addEventListener('click', exportCsv);
 $('downloadBtn').addEventListener('click', () => {
   const a = document.createElement('a');
   a.href = '/dashboard/logs/download' + authQS;
@@ -614,6 +691,7 @@ $('pauseBtn').addEventListener('click', e => {
   e.target.textContent = state.paused ? 'Resume' : 'Pause';
   $('liveLabel').textContent = state.paused ? 'paused' : 'live';
 });
+$('pageSize').value = String(state.pageSize);
 
 $('addRuleBtn').addEventListener('click', openAddRule);
 $('modalCancelBtn').addEventListener('click', closeModal);
