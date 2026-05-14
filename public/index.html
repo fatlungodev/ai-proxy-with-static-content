@@ -214,6 +214,7 @@
           <th>Match Type</th>
           <th>Pattern</th>
           <th>Response</th>
+          <th>Delay</th>
           <th>Enabled</th>
           <th>Actions</th>
         </tr>
@@ -256,6 +257,10 @@
     <div class="form-row">
       <label>Static response message</label>
       <textarea id="ruleResponse" placeholder="e.g. I'm sorry, I can't help with that."></textarea>
+    </div>
+    <div class="form-row">
+      <label>Response delay (ms)</label>
+      <input type="number" id="ruleDelayMs" min="0" max="60000" step="100" value="0" placeholder="0 = reply immediately">
     </div>
     <div class="form-row inline">
       <label class="toggle">
@@ -454,6 +459,12 @@ let rules = [];
 
 const matchTypeLabel = { contains: 'Contains', exact: 'Exact', regex: 'Regex' };
 const matchTypePill  = { contains: 'info', exact: 'accent', regex: 'warn' };
+function fmtDelay(ms) {
+  const n = Number(ms) || 0;
+  if (n <= 0) return '—';
+  if (n < 1000) return n + ' ms';
+  return (n / 1000).toFixed(n % 1000 ? 1 : 0) + ' s';
+}
 
 async function fetchRules() {
   try {
@@ -472,6 +483,7 @@ function renderRules() {
       <td><span class="pill ${matchTypePill[rule.matchType] || 'muted'}">${esc(matchTypeLabel[rule.matchType] || rule.matchType)}</span></td>
       <td class="mono truncate" title="${esc(rule.pattern)}">${esc(rule.pattern)}</td>
       <td class="truncate" title="${esc(rule.response)}" style="max-width:200px">${esc(rule.response)}</td>
+      <td class="mono">${fmtDelay(rule.delayMs)}</td>
       <td>
         <label class="toggle" title="${rule.enabled ? 'Enabled' : 'Disabled'}">
           <input type="checkbox" ${rule.enabled ? 'checked' : ''} onchange="toggleRule('${esc(rule.id)}', this.checked)">
@@ -511,6 +523,7 @@ function openAddRule() {
   $('ruleMatchType').value = 'contains';
   $('rulePattern').value = '';
   $('ruleResponse').value = '';
+  $('ruleDelayMs').value = 0;
   $('ruleEnabled').checked = true;
   $('ruleModal').classList.add('show');
 }
@@ -524,6 +537,7 @@ function openEditRule(id) {
   $('ruleMatchType').value = rule.matchType;
   $('rulePattern').value = rule.pattern;
   $('ruleResponse').value = rule.response;
+  $('ruleDelayMs').value = Number(rule.delayMs) || 0;
   $('ruleEnabled').checked = rule.enabled;
   $('ruleModal').classList.add('show');
 }
@@ -534,16 +548,19 @@ function closeModal() {
 
 async function saveRule() {
   const id = $('ruleId').value;
+  const delayMs = parseInt($('ruleDelayMs').value, 10) || 0;
   const payload = {
     name: $('ruleName').value.trim() || 'Untitled',
     matchType: $('ruleMatchType').value,
     pattern: $('rulePattern').value.trim(),
     response: $('ruleResponse').value.trim(),
     enabled: $('ruleEnabled').checked,
+    delayMs,
   };
 
   if (!payload.pattern) { alert('Pattern is required.'); return; }
   if (!payload.response) { alert('Response message is required.'); return; }
+  if (delayMs < 0 || delayMs > 60000) { alert('Delay must be between 0 and 60000 ms.'); return; }
 
   const url = id ? '/dashboard/rules/' + id + authQS : '/dashboard/rules' + authQS;
   const method = id ? 'PUT' : 'POST';

@@ -9,6 +9,7 @@ const DATA_FILE = path.join(__dirname, '..', 'data', 'rules.json');
 const MAX_PATTERN_LEN = 500;
 const MAX_RESPONSE_LEN = 10_000;
 const MAX_NAME_LEN = 200;
+const MAX_DELAY_MS = 60_000;
 // Prompt text is capped before regex matching to limit ReDoS exposure.
 const MAX_MATCH_TEXT_LEN = 10_000;
 
@@ -64,6 +65,18 @@ function validateRule(rule) {
     const regexErr = validateRegex(rule.pattern);
     if (regexErr) throw new Error(`invalid regex pattern: ${regexErr}`);
   }
+  if (rule.delayMs !== undefined && rule.delayMs !== null && rule.delayMs !== '') {
+    const n = Number(rule.delayMs);
+    if (!Number.isFinite(n) || !Number.isInteger(n) || n < 0 || n > MAX_DELAY_MS) {
+      throw new Error(`delayMs must be an integer between 0 and ${MAX_DELAY_MS}`);
+    }
+  }
+}
+
+function coerceDelayMs(v) {
+  if (v === undefined || v === null || v === '') return 0;
+  const n = Number(v);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
 }
 
 function list() {
@@ -83,6 +96,7 @@ function add(rule) {
     pattern: rule.pattern,
     response: rule.response,
     enabled: rule.enabled !== false,
+    delayMs: coerceDelayMs(rule.delayMs),
     createdAt: new Date().toISOString(),
   };
   rules.push(newRule);
@@ -99,11 +113,11 @@ function update(id, updates) {
   const merged = { ...rules[idx], ...updates };
   // Only validate fields that were actually changed to keep toggle-only updates cheap.
   const changed = Object.keys(updates);
-  if (changed.some(k => ['pattern', 'response', 'matchType', 'name'].includes(k))) {
+  if (changed.some(k => ['pattern', 'response', 'matchType', 'name', 'delayMs'].includes(k))) {
     validateRule(merged);
   }
 
-  const allowed = ['name', 'matchType', 'pattern', 'response', 'enabled'];
+  const allowed = ['name', 'matchType', 'pattern', 'response', 'enabled', 'delayMs'];
   const patch = {};
   for (const key of allowed) {
     if (key in updates) patch[key] = updates[key];
@@ -111,6 +125,7 @@ function update(id, updates) {
   if (patch.matchType && !['contains', 'exact', 'regex'].includes(patch.matchType)) {
     delete patch.matchType;
   }
+  if ('delayMs' in patch) patch.delayMs = coerceDelayMs(patch.delayMs);
   rules[idx] = { ...rules[idx], ...patch };
   saveRules();
   logApp('rule_updated', { id: rules[idx].id, name: rules[idx].name, changes: Object.keys(patch) });
