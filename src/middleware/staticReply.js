@@ -200,12 +200,18 @@ module.exports = function staticReplyMiddleware(req, res, next) {
 
   req.trace?.('static_reply_delay_start', { mode, format, delayMs: delay });
   const timer = setTimeout(() => {
-    if (req.aborted || res.writableEnded) {
+    // Use destroyed/writableEnded since req.aborted is deprecated on Node 18+
+    // and can race with a 'close' event already in flight.
+    if (req.destroyed || res.destroyed || res.writableEnded) {
       req.trace?.('static_reply_delay_aborted', { delayMs: delay });
       return;
     }
     req.trace?.('static_reply_respond', { mode, format, delayMs: delay });
-    action();
+    try { action(); } catch (err) {
+      req.trace?.('static_reply_error', { error: err.message });
+    }
   }, delay);
-  req.on('close', () => clearTimeout(timer));
+  const onClose = () => clearTimeout(timer);
+  req.on('close', onClose);
+  res.on('finish', () => req.off('close', onClose));
 };
