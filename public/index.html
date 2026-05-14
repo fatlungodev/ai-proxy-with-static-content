@@ -548,15 +548,27 @@ async function fetchRules() {
 
 const RULE_CSV_HEADERS = ['name', 'matchType', 'pattern', 'response', 'enabled', 'delayMs'];
 
+// Rules CSVs are explicitly meant to be shared between deployments via email
+// or chat. Prefix fields that start with =, +, -, @, TAB or CR with a single
+// quote so Excel / Sheets show them as literal text instead of evaluating
+// them as formulas. Only applied to the rules export — log CSVs aren't
+// expected to be opened in a spreadsheet by another person.
+function defuseFormula(s) {
+  if (typeof s !== 'string') return s;
+  return /^[=+\-@\t\r]/.test(s) ? "'" + s : s;
+}
+
 function exportRules() {
   // id and createdAt are server-side — strip on export so the importer
   // assigns fresh values and two systems can't collide on UUIDs.
   const lines = [RULE_CSV_HEADERS.join(',')];
   for (const r of rules) {
     lines.push(RULE_CSV_HEADERS.map(h => {
-      if (h === 'enabled') return escapeCsv(r.enabled ? 'true' : 'false');
-      if (h === 'delayMs') return escapeCsv(Number(r.delayMs) || 0);
-      return escapeCsv(r[h]);
+      let v;
+      if (h === 'enabled') v = r.enabled ? 'true' : 'false';
+      else if (h === 'delayMs') v = Number(r.delayMs) || 0;
+      else v = r[h];
+      return escapeCsv(defuseFormula(v));
     }).join(','));
   }
   // Prepend UTF-8 BOM so Excel auto-detects encoding for non-ASCII responses.
@@ -596,11 +608,23 @@ function parseCsv(text) {
   return rows;
 }
 
+// Reverses defuseFormula() on import: strip a single leading apostrophe only
+// when it precedes a dangerous lead char, so a legitimate apostrophe like
+// "'hello" is preserved exactly.
+function reverseDefuseFormula(s) {
+  return typeof s === 'string' && /^'[=+\-@\t\r]/.test(s) ? s.slice(1) : s;
+}
+
+// Returns true / false for recognised spellings, true for blank (default
+// enabled), and null for unrecognised values so the importer can surface
+// a "did you mean…" warning instead of silently re-enabling typos.
 function parseBoolean(v) {
   if (v == null) return true;
   const s = String(v).trim().toLowerCase();
-  if (s === '') return true; // blank defaults to enabled
-  return !['false', 'no', '0', 'off', 'disabled'].includes(s);
+  if (s === '') return true;
+  if (['true', 'yes', 'y', '1', 'on', 'enabled'].includes(s)) return true;
+  if (['false', 'no', 'n', '0', 'off', 'disabled'].includes(s)) return false;
+  return null;
 }
 
 async function onImportFile(e) {
@@ -643,40 +667,69 @@ async function onImportFile(e) {
   }
 
   const dataRows = parsedRows.slice(1).filter(row => row.some(c => String(c).trim() !== ''));
-  const incoming = dataRows.map(row => {
+  const enabledWarnings = [];
+  const incoming = dataRows.map((row, idx) => {
     const obj = {};
     headers.forEach((h, i) => obj[h] = row[i] != null ? row[i] : '');
+    const enabledParsed = parseBoolean(obj.enabled);
+    if (enabledParsed === null) {
+      enabledWarnings.push({ row: idx + 2, value: String(obj.enabled) }); // +2 = +1 for header, +1 for 1-based
+    }
     return {
-      name: String(obj.name || 'Untitled').trim(),
+      name: reverseDefuseFormula(String(obj.name || 'Untitled').trim()),
       matchType: String(obj.matchtype || 'contains').trim().toLowerCase(),
-      pattern: obj.pattern,
-      response: obj.response,
-      enabled: parseBoolean(obj.enabled),
+      pattern: reverseDefuseFormula(obj.pattern),
+      response: reverseDefuseFormula(obj.response),
+      enabled: enabledParsed === null ? true : enabledParsed, // fall back to enabled, but warn
       delayMs: parseInt(String(obj.delayms || '0').trim(), 10) || 0,
     };
   });
 
-  if (!incoming.length) {
+  // Allow an "empty" import (just a header) when existing rules exist —
+  // that's the symmetric counterpart of exporting an empty state.
+  if (!incoming.length && rules.length === 0) {
     alert('No data rows found (only a header row?).');
     e.target.value = '';
     return;
   }
 
   // 1st prompt: confirm the operation at all.
-  if (!confirm(`Import ${incoming.length} rule(s) from "${file.name}"?`)) {
+  const intent = incoming.length === 0
+    ? `Clear all ${rules.length} existing rule(s)? (the CSV has no data rows)`
+    : `Import ${incoming.length} rule(s) from "${file.name}"?`;
+  if (!confirm(intent)) {
     e.target.value = '';
     return;
   }
 
+  // Surface any unrecognised "enabled" values before we mutate state.
+  if (enabledWarnings.length) {
+    const detail = enabledWarnings.slice(0, 8).map(w => `  row ${w.row}: "${w.value}"`).join('\n');
+    const more = enabledWarnings.length > 8 ? `\n  …and ${enabledWarnings.length - 8} more` : '';
+    if (!confirm(
+      `${enabledWarnings.length} row(s) have an unrecognised "enabled" value and will default to ENABLED:\n${detail}${more}\n\n` +
+      `Recognised: true / false / yes / no / y / n / 1 / 0 / on / off / enabled / disabled.\n\n` +
+      `OK to proceed anyway, Cancel to abort and fix the CSV.`
+    )) {
+      e.target.value = '';
+      return;
+    }
+  }
+
   // 2nd prompt: only ask replace-vs-merge when existing rules would be affected.
+  // Empty-incoming forces replace mode (merge of empty is a no-op).
   let mode = 'merge';
   if (rules.length > 0) {
-    const replace = confirm(
-      `Replace all ${rules.length} existing rule(s)?\n\n` +
-      `OK    = REPLACE existing rules with the imported ones (destructive)\n` +
-      `Cancel = MERGE — add imported rules alongside existing ones`
-    );
-    mode = replace ? 'replace' : 'merge';
+    if (incoming.length === 0) {
+      mode = 'replace';
+    } else {
+      const replace = confirm(
+        `Replace all ${rules.length} existing rule(s)?\n\n` +
+        `OK    = REPLACE existing rules with the imported ones (destructive)\n` +
+        `Cancel = MERGE — add imported rules alongside existing ones`
+      );
+      mode = replace ? 'replace' : 'merge';
+    }
   }
 
   try {
