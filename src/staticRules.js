@@ -127,6 +127,20 @@ function remove(id) {
   return true;
 }
 
+// n8n's AI Agent serializes its prompt as a JSON-fragment string:
+//     "prompt": "<the user's actual text>"
+// We unwrap so rules match against the real prompt, not the wrapper.
+// Disable with UNWRAP_N8N_PROMPT=false in the environment.
+const N8N_PROMPT_WRAPPER = /^\s*"prompt"\s*:\s*"((?:[^"\\]|\\.)*)"\s*$/;
+const UNWRAP_N8N = process.env.UNWRAP_N8N_PROMPT !== 'false';
+function unwrapN8nPrompt(text) {
+  if (!UNWRAP_N8N || typeof text !== 'string') return text;
+  const m = text.match(N8N_PROMPT_WRAPPER);
+  if (!m) return text;
+  try { return JSON.parse('"' + m[1] + '"'); }
+  catch { return m[1]; }
+}
+
 // Extract a single prompt string from the request body regardless of API format.
 function extractPromptText(body) {
   if (!body) return '';
@@ -137,31 +151,31 @@ function extractPromptText(body) {
     return body.messages
       .filter(m => m.role === 'user' || m.role === 'system')
       .map(m => {
-        if (typeof m.content === 'string') return m.content;
+        if (typeof m.content === 'string') return unwrapN8nPrompt(m.content);
         if (Array.isArray(m.content)) {
-          return m.content.filter(c => c.type === 'text').map(c => c.text).join(' ');
+          return m.content.filter(c => c.type === 'text').map(c => unwrapN8nPrompt(c.text)).join(' ');
         }
         return '';
       }).join('\n');
   }
 
   // /v1/completions (legacy)
-  if (typeof body.prompt === 'string') return body.prompt;
-  if (Array.isArray(body.prompt)) return body.prompt.join('\n');
+  if (typeof body.prompt === 'string') return unwrapN8nPrompt(body.prompt);
+  if (Array.isArray(body.prompt)) return body.prompt.map(unwrapN8nPrompt).join('\n');
 
   // /v1/responses — skip assistant outputs in conversation history.
-  if (typeof body.input === 'string') return body.input;
+  if (typeof body.input === 'string') return unwrapN8nPrompt(body.input);
   if (Array.isArray(body.input)) {
     return body.input.map(item => {
-      if (typeof item === 'string') return item;
+      if (typeof item === 'string') return unwrapN8nPrompt(item);
       if (item.type === 'message') {
         if (item.role && item.role !== 'user' && item.role !== 'system') return '';
         // content may be a plain string (n8n, OpenAI SDK simple form) or an array of parts
-        if (typeof item.content === 'string') return item.content;
+        if (typeof item.content === 'string') return unwrapN8nPrompt(item.content);
         if (Array.isArray(item.content)) {
           return item.content
             .filter(c => c.type === 'input_text' || c.type === 'text' || typeof c.text === 'string')
-            .map(c => c.text)
+            .map(c => unwrapN8nPrompt(c.text))
             .join(' ');
         }
       }
