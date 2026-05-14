@@ -172,20 +172,40 @@ module.exports = function staticReplyMiddleware(req, res, next) {
     ruleName: matchedRule.name,
     matchType: matchedRule.matchType,
     pattern: matchedRule.pattern,
+    delayMs: matchedRule.delayMs || 0,
   });
 
   const isResponsesApi       = body.input !== undefined;
   const isLegacyCompletions  = !isResponsesApi && body.prompt !== undefined && body.messages === undefined;
+  const format               = isResponsesApi ? 'responses' : isLegacyCompletions ? 'completions' : 'chat';
 
+  let action;
   if (body.stream) {
-    req.trace?.('static_reply_respond', { mode: 'stream', format: isResponsesApi ? 'responses' : isLegacyCompletions ? 'completions' : 'chat' });
-    if (isResponsesApi)       return sendResponsesStreamResponse(matchedRule, body, res);
-    if (isLegacyCompletions)  return sendCompletionsStreamResponse(matchedRule, body, res);
-    return sendChatStreamResponse(matchedRule, body, res);
+    if (isResponsesApi)      action = () => sendResponsesStreamResponse(matchedRule, body, res);
+    else if (isLegacyCompletions) action = () => sendCompletionsStreamResponse(matchedRule, body, res);
+    else                     action = () => sendChatStreamResponse(matchedRule, body, res);
+  } else {
+    if (isResponsesApi)      action = () => res.json(buildResponsesApiResponse(matchedRule, body));
+    else if (isLegacyCompletions) action = () => res.json(buildCompletionsResponse(matchedRule, body));
+    else                     action = () => res.json(buildChatResponse(matchedRule, body));
   }
 
-  req.trace?.('static_reply_respond', { mode: 'json', format: isResponsesApi ? 'responses' : isLegacyCompletions ? 'completions' : 'chat' });
-  if (isResponsesApi)       return res.json(buildResponsesApiResponse(matchedRule, body));
-  if (isLegacyCompletions)  return res.json(buildCompletionsResponse(matchedRule, body));
-  return res.json(buildChatResponse(matchedRule, body));
+  const mode = body.stream ? 'stream' : 'json';
+  const delay = Number(matchedRule.delayMs) || 0;
+
+  if (delay <= 0) {
+    req.trace?.('static_reply_respond', { mode, format });
+    return action();
+  }
+
+  req.trace?.('static_reply_delay_start', { mode, format, delayMs: delay });
+  const timer = setTimeout(() => {
+    if (req.aborted || res.writableEnded) {
+      req.trace?.('static_reply_delay_aborted', { delayMs: delay });
+      return;
+    }
+    req.trace?.('static_reply_respond', { mode, format, delayMs: delay });
+    action();
+  }, delay);
+  req.on('close', () => clearTimeout(timer));
 };
