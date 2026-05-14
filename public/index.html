@@ -195,7 +195,7 @@
       <button id="clearBtn">Clear view</button>
       <button id="pauseBtn">Pause</button>
       <button id="exportCsvBtn">Export CSV</button>
-      <button id="downloadBtn">Download logs</button>
+      <button id="downloadBtn">Debug logs</button>
     </div>
 
     <table>
@@ -225,7 +225,10 @@
   <div id="tab-rules" class="tab-panel">
     <div class="toolbar">
       <span style="color:var(--muted);font-size:13px">Intercept incoming prompts and return a pre-defined message without hitting the upstream LLM.</span>
-      <button id="addRuleBtn" class="btn primary" style="margin-left:auto">+ Add Rule</button>
+      <button id="exportRulesBtn" style="margin-left:auto">Export</button>
+      <button id="importRulesBtn">Import</button>
+      <input type="file" id="importFileInput" accept="application/json,.json" style="display:none">
+      <button id="addRuleBtn" class="btn primary">+ Add Rule</button>
     </div>
 
     <table id="rulesTable">
@@ -543,6 +546,86 @@ async function fetchRules() {
   } catch {}
 }
 
+function exportRules() {
+  // Strip id and createdAt — those are re-assigned on import.
+  const stripped = rules.map(r => ({
+    name: r.name,
+    matchType: r.matchType,
+    pattern: r.pattern,
+    response: r.response,
+    enabled: r.enabled,
+    delayMs: Number(r.delayMs) || 0,
+  }));
+  const bundle = { version: 1, exportedAt: new Date().toISOString(), rules: stripped };
+  const blob = new Blob([JSON.stringify(bundle, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `ai-proxy-rules-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+async function onImportFile(e) {
+  const file = e.target.files[0];
+  if (!file) return;
+  let incoming;
+  try {
+    const text = await file.text();
+    const parsed = JSON.parse(text);
+    incoming = Array.isArray(parsed) ? parsed : (parsed.rules || []);
+  } catch (err) {
+    alert('Invalid JSON file: ' + err.message);
+    e.target.value = '';
+    return;
+  }
+  if (!Array.isArray(incoming) || !incoming.length) {
+    alert('No rules found in the file.');
+    e.target.value = '';
+    return;
+  }
+
+  // 1st prompt: confirm the operation at all.
+  if (!confirm(`Import ${incoming.length} rule(s) from "${file.name}"?`)) {
+    e.target.value = '';
+    return;
+  }
+
+  // 2nd prompt: only ask replace-vs-merge when existing rules would be affected.
+  let mode = 'merge';
+  if (rules.length > 0) {
+    const replace = confirm(
+      `Replace all ${rules.length} existing rule(s)?\n\n` +
+      `OK    = REPLACE existing rules with the imported ones (destructive)\n` +
+      `Cancel = MERGE — add imported rules alongside existing ones`
+    );
+    mode = replace ? 'replace' : 'merge';
+  }
+
+  try {
+    const r = await fetch('/dashboard/rules/import' + authQS, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ rules: incoming, mode }),
+    });
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      throw new Error(err.error || `HTTP ${r.status}`);
+    }
+    const result = await r.json();
+    const verb = result.mode === 'replace' ? 'Replaced with' : 'Added';
+    const errs = result.errors && result.errors.length
+      ? `\n${result.errors.length} rule(s) skipped:\n` + result.errors.map(x => `  • #${x.index + 1}: ${x.error}`).join('\n')
+      : '';
+    alert(`${verb} ${result.count} rule(s).${errs}`);
+  } catch (err) {
+    alert('Import failed: ' + err.message);
+  } finally {
+    e.target.value = '';
+    await fetchRules();
+  }
+}
+
 function renderRules() {
   $('rulesEmpty').style.display = rules.length ? 'none' : 'block';
   $('rulesBody').innerHTML = rules.map(rule => `
@@ -694,6 +777,9 @@ $('pauseBtn').addEventListener('click', e => {
 $('pageSize').value = String(state.pageSize);
 
 $('addRuleBtn').addEventListener('click', openAddRule);
+$('exportRulesBtn').addEventListener('click', exportRules);
+$('importRulesBtn').addEventListener('click', () => $('importFileInput').click());
+$('importFileInput').addEventListener('change', onImportFile);
 $('modalCancelBtn').addEventListener('click', closeModal);
 $('modalSaveBtn').addEventListener('click', saveRule);
 $('ruleModal').addEventListener('click', e => { if (e.target === $('ruleModal')) closeModal(); });
