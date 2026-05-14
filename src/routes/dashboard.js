@@ -191,4 +191,31 @@ router.delete('/rules/:id', (req, res) => {
   res.status(204).end();
 });
 
+// Bulk import. Body: { rules: [...], mode: 'replace' | 'merge' }.
+// Replace mode validates all rules first and either fully succeeds or fully
+// rejects (atomic). Merge mode adds one-by-one and reports per-rule errors.
+router.post('/rules/import', (req, res) => {
+  const body = req.body || {};
+  const incoming = Array.isArray(body) ? body : body.rules;
+  const mode = body.mode === 'replace' ? 'replace' : 'merge';
+  if (!Array.isArray(incoming)) {
+    return res.status(400).json({ error: 'request body must be an array or { rules: [...] }' });
+  }
+  try {
+    if (mode === 'replace') {
+      const result = staticRules.replaceAll(incoming);
+      return res.json({ mode, count: result.length, errors: [] });
+    }
+    const added = [];
+    const errors = [];
+    incoming.forEach((r, i) => {
+      try { added.push(staticRules.add(r)); }
+      catch (err) { errors.push({ index: i, error: err.message }); }
+    });
+    return res.json({ mode, count: added.length, errors });
+  } catch (err) {
+    return res.status(400).json({ error: err.message });
+  }
+});
+
 module.exports = router;

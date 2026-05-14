@@ -94,9 +94,8 @@ function get(id) {
   return rules.find(r => r.id === id) || null;
 }
 
-function add(rule) {
-  validateRule(rule);
-  const newRule = {
+function buildRule(rule) {
+  return {
     id: crypto.randomUUID(),
     name: (rule.name || 'Untitled').slice(0, MAX_NAME_LEN),
     matchType: ['contains', 'exact', 'regex'].includes(rule.matchType) ? rule.matchType : 'contains',
@@ -106,6 +105,11 @@ function add(rule) {
     delayMs: coerceDelayMs(rule.delayMs),
     createdAt: new Date().toISOString(),
   };
+}
+
+function add(rule) {
+  validateRule(rule);
+  const newRule = buildRule(rule);
   rules.push(newRule);
   saveRules();
   logApp('rule_added', { id: newRule.id, name: newRule.name, matchType: newRule.matchType, pattern: newRule.pattern });
@@ -155,6 +159,23 @@ function remove(id) {
   saveRules();
   logApp('rule_removed', { id: removed.id, name: removed.name });
   return true;
+}
+
+// Replace the entire rule set atomically. Validates every incoming rule
+// before mutating anything so a partial-failure can't leave a half-empty
+// rules.json on disk. Returns the new rules array.
+function replaceAll(newRules) {
+  if (!Array.isArray(newRules)) throw new Error('rules must be an array');
+  newRules.forEach((r, i) => {
+    try { validateRule(r); }
+    catch (err) { throw new Error(`rule ${i + 1}: ${err.message}`); }
+  });
+  const previousCount = rules.length;
+  rules.length = 0;
+  for (const r of newRules) rules.push(buildRule(r));
+  saveRules();
+  logApp('rules_replaced', { removed: previousCount, added: rules.length });
+  return rules.slice();
 }
 
 // n8n's AI Agent serializes its prompt as a JSON-fragment string:
@@ -250,4 +271,4 @@ function match(promptText) {
 
 loadRules();
 
-module.exports = { list, get, add, update, remove, extractPromptText, match };
+module.exports = { list, get, add, update, remove, replaceAll, extractPromptText, match };
