@@ -19,7 +19,13 @@ function loadRules() {
   try {
     if (fs.existsSync(DATA_FILE)) {
       const raw = fs.readFileSync(DATA_FILE, 'utf8');
-      rules = JSON.parse(raw);
+      const parsed = JSON.parse(raw);
+      // Defensive: clamp delayMs on load so a hand-edited huge value can't
+      // trigger setTimeout's 32-bit wraparound at match time.
+      rules = (Array.isArray(parsed) ? parsed : []).map(r => ({
+        ...r,
+        delayMs: coerceDelayMs(r.delayMs),
+      }));
       logApp('rules_loaded', { count: rules.length, file: DATA_FILE });
     } else {
       logApp('rules_loaded', { count: 0, file: DATA_FILE, note: 'file not found, starting empty' });
@@ -76,7 +82,8 @@ function validateRule(rule) {
 function coerceDelayMs(v) {
   if (v === undefined || v === null || v === '') return 0;
   const n = Number(v);
-  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  return Math.min(Math.floor(n), MAX_DELAY_MS);
 }
 
 function list() {
@@ -125,7 +132,15 @@ function update(id, updates) {
   if (patch.matchType && !['contains', 'exact', 'regex'].includes(patch.matchType)) {
     delete patch.matchType;
   }
-  if ('delayMs' in patch) patch.delayMs = coerceDelayMs(patch.delayMs);
+  // Treat null / empty string as "no change" so a careless PUT can't silently
+  // clear a previously-set delay. To clear, the caller must send 0 explicitly.
+  if ('delayMs' in patch) {
+    if (patch.delayMs === null || patch.delayMs === '') {
+      delete patch.delayMs;
+    } else {
+      patch.delayMs = coerceDelayMs(patch.delayMs);
+    }
+  }
   rules[idx] = { ...rules[idx], ...patch };
   saveRules();
   logApp('rule_updated', { id: rules[idx].id, name: rules[idx].name, changes: Object.keys(patch) });
