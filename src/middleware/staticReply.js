@@ -200,9 +200,12 @@ module.exports = function staticReplyMiddleware(req, res, next) {
 
   req.trace?.('static_reply_delay_start', { mode, format, delayMs: delay });
   const timer = setTimeout(() => {
-    // Use destroyed/writableEnded since req.aborted is deprecated on Node 18+
-    // and can race with a 'close' event already in flight.
-    if (req.destroyed || res.destroyed || res.writableEnded) {
+    // Only check the response side. req.destroyed is set to true by Node 18+
+    // shortly after the request body is fully consumed even when the
+    // connection is healthy, so checking it here would silently drop every
+    // delayed reply. Client-disconnect during the delay is handled via the
+    // req.on('close') listener below.
+    if (res.destroyed || res.writableEnded) {
       req.trace?.('static_reply_delay_aborted', { delayMs: delay });
       return;
     }
