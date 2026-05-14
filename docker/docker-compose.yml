@@ -9,3 +9,7 @@ services:
       - "3005:3005"
     env_file:
       - ../.env
+    # Persistent storage for static reply rules, request logs, and app events.
+    # Survives container restart and rebuild. Inspect/back up files in ../data/.
+    volumes:
+      - ../data:/app/data
