@@ -749,19 +749,19 @@ async function onImportFile(e) {
     }
   }
 
-  // 2nd prompt: only ask replace-vs-merge when existing rules would be affected.
-  // Empty-incoming forces replace mode (merge of empty is a no-op).
-  let mode = 'merge';
+  // 2nd prompt: only ask replace-vs-upsert when existing rules would be affected.
+  // Empty-incoming forces replace mode (upsert of empty is a no-op).
+  let mode = 'upsert';
   if (rules.length > 0) {
     if (incoming.length === 0) {
       mode = 'replace';
     } else {
       const replace = confirm(
         `Replace all ${rules.length} existing rule(s)?\n\n` +
-        `OK    = REPLACE existing rules with the imported ones (destructive)\n` +
-        `Cancel = MERGE — add imported rules alongside existing ones`
+        `OK    = REPLACE — replace existing rules with the imported ones (destructive)\n` +
+        `Cancel = UPSERT — update existing rules with the same name; add new ones`
       );
-      mode = replace ? 'replace' : 'merge';
+      mode = replace ? 'replace' : 'upsert';
     }
   }
 
@@ -776,11 +776,13 @@ async function onImportFile(e) {
       throw new Error(err.error || `HTTP ${r.status}`);
     }
     const result = await r.json();
-    const verb = result.mode === 'replace' ? 'Replaced with' : 'Added';
     const errs = result.errors && result.errors.length
       ? `\n${result.errors.length} rule(s) skipped:\n` + result.errors.map(x => `  • #${x.index + 1}: ${x.error}`).join('\n')
       : '';
-    alert(`${verb} ${result.count} rule(s).${errs}`);
+    const summary = result.mode === 'replace'
+      ? `Replaced with ${result.count} rule(s).`
+      : `Imported ${result.count} rule(s): ${result.updated} updated, ${result.added} added.`;
+    alert(summary + errs);
   } catch (err) {
     alert('Import failed: ' + err.message);
   } finally {
