@@ -15,17 +15,54 @@ const MAX_MATCH_TEXT_LEN = 10_000;
 
 let rules = [];
 
+// Mirrors decodeEscapes() in public/index.html — the CSV transit format
+// encodes \n / \r / \t / \\ so each rule fits on one line; once a rule is
+// loaded into the proxy every consumer (edit form, table, matcher reply)
+// expects the native form. Pre-f63cac1 imports stored the literal escapes
+// in rules.json, so loadRules() runs this as a one-time migration.
+function decodeEscapes(s) {
+  if (typeof s !== 'string') return s;
+  let out = '';
+  for (let i = 0; i < s.length; i++) {
+    if (s[i] === '\\' && i + 1 < s.length) {
+      const next = s[i + 1];
+      if (next === 'n')  { out += '\n'; i++; continue; }
+      if (next === 'r')  { out += '\r'; i++; continue; }
+      if (next === 't')  { out += '\t'; i++; continue; }
+      if (next === '\\') { out += '\\'; i++; continue; }
+    }
+    out += s[i];
+  }
+  return out;
+}
+
 function loadRules() {
   try {
     if (fs.existsSync(DATA_FILE)) {
       const raw = fs.readFileSync(DATA_FILE, 'utf8');
       const parsed = JSON.parse(raw);
+      let migrated = 0;
       // Defensive: clamp delayMs on load so a hand-edited huge value can't
-      // trigger setTimeout's 32-bit wraparound at match time.
-      rules = (Array.isArray(parsed) ? parsed : []).map(r => ({
-        ...r,
-        delayMs: coerceDelayMs(r.delayMs),
-      }));
+      // trigger setTimeout's 32-bit wraparound at match time. Also decode
+      // any literal \n / \r / \t / \\ that pre-f63cac1 imports left behind
+      // so the dashboard renders real newlines, not the four-char escape.
+      rules = (Array.isArray(parsed) ? parsed : []).map(r => {
+        const next = {
+          ...r,
+          delayMs: coerceDelayMs(r.delayMs),
+          name:     decodeEscapes(r.name),
+          pattern:  decodeEscapes(r.pattern),
+          response: decodeEscapes(r.response),
+        };
+        if (next.name !== r.name || next.pattern !== r.pattern || next.response !== r.response) {
+          migrated++;
+        }
+        return next;
+      });
+      if (migrated > 0) {
+        saveRules();
+        logApp('rules_decoded_migration', { count: migrated, file: DATA_FILE });
+      }
       logApp('rules_loaded', { count: rules.length, file: DATA_FILE });
     } else {
       logApp('rules_loaded', { count: 0, file: DATA_FILE, note: 'file not found, starting empty' });
@@ -178,6 +215,50 @@ function replaceAll(newRules) {
   return rules.slice();
 }
 
+// Upsert imported rules by name (case-sensitive). For each incoming rule:
+// if an existing rule with the same name is present, replace its mutable
+// fields in place (preserving id and createdAt so cross-process refs stay
+// stable); otherwise add it as a fresh rule. Duplicates within `incoming`
+// follow last-wins semantics — the later row's fields overwrite the
+// earlier one, since the second lookup finds the rule the first row just
+// produced. Validates atomically up front, like replaceAll(), so a partial
+// failure can't leave the file half-applied.
+function upsertByName(incoming) {
+  if (!Array.isArray(incoming)) throw new Error('rules must be an array');
+  incoming.forEach((r, i) => {
+    try { validateRule(r); }
+    catch (err) { throw new Error(`rule ${i + 1}: ${err.message}`); }
+  });
+
+  let updated = 0;
+  let added = 0;
+  for (const r of incoming) {
+    const name = (r.name || 'Untitled').slice(0, MAX_NAME_LEN);
+    const idx = rules.findIndex(existing => existing.name === name);
+    if (idx === -1) {
+      rules.push(buildRule(r));
+      added++;
+    } else {
+      const existing = rules[idx];
+      const matchType = ['contains', 'exact', 'regex'].includes(r.matchType) ? r.matchType : 'contains';
+      rules[idx] = {
+        id: existing.id,
+        createdAt: existing.createdAt,
+        name,
+        matchType,
+        pattern: r.pattern,
+        response: r.response,
+        enabled: r.enabled !== false,
+        delayMs: coerceDelayMs(r.delayMs),
+      };
+      updated++;
+    }
+  }
+  saveRules();
+  logApp('rules_upserted', { updated, added });
+  return { updated, added };
+}
+
 // n8n's AI Agent serializes its prompt as a JSON-fragment string:
 //     "prompt": "<the user's actual text>"
 // We unwrap so rules match against the real prompt, not the wrapper.
@@ -271,4 +352,4 @@ function match(promptText) {
 
 loadRules();
 
-module.exports = { list, get, add, update, remove, replaceAll, extractPromptText, match };
+module.exports = { list, get, add, update, remove, replaceAll, upsertByName, extractPromptText, match };
