@@ -12,6 +12,15 @@ router.post('/completions', async (req, res) => {
 
     if (!body.model) body.model = config.defaultModel;
 
+    // Names from LOCAL_MODELS are local aliases shown in client UIs (e.g.
+    // n8n's model dropdown reads them from /v1/models). The upstream provider
+    // doesn't recognize them and would reject the request, so remap to
+    // defaultModel before forwarding — and before the allow-list check, so
+    // an allow-list that only lists upstream models still permits aliases.
+    if (config.localModels.length > 0 && config.localModels.includes(body.model)) {
+      body.model = config.defaultModel;
+    }
+
     if (config.allowedModels.length > 0 && !config.allowedModels.includes(body.model)) {
       return res.status(400).json({
         error: {
